@@ -120,6 +120,7 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) 
     replyToId: entry.replyToId,
     replyToMode: entry.replyToMode,
     formatting: entry.formatting,
+    identity: entry.identity,
     bestEffort: entry.bestEffort,
     gifPlayback: entry.gifPlayback,
     forceDocument: entry.forceDocument,

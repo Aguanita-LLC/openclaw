@@ -81,7 +81,10 @@ type CreateLaneTextDelivererParams = {
   retainPreviewOnCleanupByLane: Record<LaneName, boolean>;
   draftMaxChars: number;
   applyTextToPayload: (payload: ReplyPayload, text: string) => ReplyPayload;
-  sendPayload: (payload: ReplyPayload) => Promise<boolean>;
+  sendPayload: (
+    payload: ReplyPayload,
+    options?: { durable?: boolean; silent?: boolean },
+  ) => Promise<boolean>;
   flushDraftLane: (lane: DraftLaneState) => Promise<void>;
   stopDraftLane: (lane: DraftLaneState) => Promise<void>;
   editPreview: (params: {
@@ -454,7 +457,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       return undefined;
     }
     if (canEditViaPreview && shouldUseFreshFinalForPreview(lane, archivedPreview.visibleSinceMs)) {
-      const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+      const delivered = await params.sendPayload(params.applyTextToPayload(payload, text), {
+        durable: true,
+      });
       if (delivered) {
         try {
           await params.deletePreviewMessage(archivedPreview.messageId);
@@ -497,7 +502,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
     // Send the replacement message first, then clean up the old preview.
     // This avoids the visual "disappear then reappear" flash.
-    const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+    const delivered = await params.sendPayload(params.applyTextToPayload(payload, text), {
+      durable: true,
+    });
     // Once this archived preview is consumed by a fallback final send, delete it
     // regardless of deleteIfUnused. That flag only applies to unconsumed boundaries.
     if (delivered || archivedPreview.deleteIfUnused !== false) {
@@ -561,7 +568,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         }
         if (shouldUseFreshFinalForLane(lane)) {
           await params.stopDraftLane(lane);
-          const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+          const delivered = await params.sendPayload(params.applyTextToPayload(payload, text), {
+            durable: true,
+          });
           if (delivered) {
             await clearActivePreviewAfterFreshFinal(lane, laneName);
             return result("sent");
@@ -601,7 +610,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         );
       }
       await params.stopDraftLane(lane);
-      const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+      const delivered = await params.sendPayload(params.applyTextToPayload(payload, text), {
+        durable: true,
+      });
       return delivered ? result("sent") : result("skipped");
     }
 

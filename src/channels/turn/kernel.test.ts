@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,6 +12,16 @@ import {
   runPreparedChannelTurn,
   runChannelTurn,
 } from "./kernel.js";
+
+const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
+
+vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/outbound/deliver.js")>();
+  return {
+    ...actual,
+    deliverOutboundPayloads,
+  };
+});
 
 const cfg = {} as OpenClawConfig;
 
@@ -50,6 +60,153 @@ function createDispatch(
 }
 
 describe("channel turn kernel", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("routes assembled final replies through durable outbound delivery", async () => {
+    deliverOutboundPayloads.mockResolvedValueOnce([{ messageId: "tg-1" }]);
+    const deliver = vi.fn();
+    const recordInboundSession = createRecordInboundSession();
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+
+    const result = await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "telegram",
+      accountId: "acct",
+      agentId: "main",
+      routeSessionKey: "agent:main:telegram:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({
+        To: "123",
+        OriginatingTo: "123",
+        MessageThreadId: 777,
+        AccountId: "acct",
+        ChatType: "group",
+        SenderId: "sender-1",
+      }),
+      recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: { deliver, durable: { replyToMode: "first" } },
+    });
+
+    expect(result.dispatched).toBe(true);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123",
+        accountId: "acct",
+        payloads: [expect.objectContaining({ text: "reply" })],
+        replyToMode: "first",
+        threadId: 777,
+        session: expect.objectContaining({
+          key: "agent:main:test:peer",
+          agentId: "main",
+          requesterAccountId: "acct",
+          requesterSenderId: "sender-1",
+          conversationType: "group",
+        }),
+      }),
+    );
+  });
+
+  it("returns durable delivery result to the buffered dispatcher", async () => {
+    deliverOutboundPayloads.mockResolvedValueOnce([{ messageId: "tg-1" }, { messageId: "tg-2" }]);
+    let deliveredResult: unknown;
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async (params: Parameters<DispatchReplyWithBufferedBlockDispatcher>[0]) => {
+        deliveredResult = await params.dispatcherOptions.deliver(
+          { text: "reply" },
+          { kind: "final" },
+        );
+        return {
+          queuedFinal: true,
+          counts: { tool: 0, block: 0, final: 1 },
+        };
+      },
+    ) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "telegram",
+      accountId: "acct",
+      agentId: "main",
+      routeSessionKey: "agent:main:telegram:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: { deliver: vi.fn(), durable: { replyToMode: "first" } },
+    });
+
+    expect(deliveredResult).toEqual(
+      expect.objectContaining({
+        messageIds: ["tg-1", "tg-2"],
+        visibleReplySent: true,
+      }),
+    );
+  });
+
+  it("returns custom delivery result to the buffered dispatcher", async () => {
+    let deliveredResult: unknown;
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async (params: Parameters<DispatchReplyWithBufferedBlockDispatcher>[0]) => {
+        deliveredResult = await params.dispatcherOptions.deliver(
+          { text: "reply" },
+          { kind: "final" },
+        );
+        return {
+          queuedFinal: true,
+          counts: { tool: 0, block: 0, final: 1 },
+        };
+      },
+    ) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "test",
+      agentId: "main",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: {
+        durable: false,
+        deliver: vi.fn(async () => ({ messageIds: ["local-1"], visibleReplySent: true })),
+      },
+    });
+
+    expect(deliveredResult).toEqual(
+      expect.objectContaining({
+        messageIds: ["local-1"],
+        visibleReplySent: true,
+      }),
+    );
+  });
+
+  it("does not use durable outbound delivery when durable options are omitted", async () => {
+    const deliver = vi.fn(async () => ({ messageIds: ["local-1"], visibleReplySent: true }));
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+
+    await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "telegram",
+      accountId: "acct",
+      agentId: "main",
+      routeSessionKey: "agent:main:telegram:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: { deliver },
+    });
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(deliver).toHaveBeenCalledWith({ text: "reply" }, { kind: "final" });
+  });
+
   it("records inbound session before dispatching delivery", async () => {
     const events: string[] = [];
     const deliver = vi.fn(async () => {

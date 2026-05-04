@@ -9,6 +9,7 @@ import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.
 import type { FinalizedMsgContext, MsgContext } from "../../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DeliverOutboundPayloadsParams } from "../../infra/outbound/deliver.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 
 export type ChannelTurnAdmission =
@@ -180,6 +181,15 @@ export type ChannelTurnDeliveryAdapter = {
     payload: ReplyPayload,
     info: ChannelDeliveryInfo,
   ) => Promise<ChannelDeliveryResult | void>;
+  durable?:
+    | false
+    | (Pick<
+        DeliverOutboundPayloadsParams,
+        "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
+      > & {
+        to?: string | null;
+        replyToId?: string | null;
+      });
   onError?: (err: unknown, info: { kind: string }) => void;
 };
 

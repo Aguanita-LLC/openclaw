@@ -12,7 +12,10 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
-import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import {
+  deliverDurableInboundReplyPayload,
+  runInboundReplyTurn,
+} from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
@@ -41,7 +44,7 @@ import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
-import { deliverReplies } from "./deliver.js";
+import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   buildIMessageInboundContext,
@@ -412,10 +415,30 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const dispatcher = createReplyDispatcher({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
-      deliver: async (payload) => {
+      deliver: async (payload, info) => {
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
+          return;
+        }
+        const durable = await deliverDurableInboundReplyPayload({
+          cfg,
+          channel: "imessage",
+          accountId: accountInfo.accountId,
+          agentId: decision.route.agentId,
+          ctxPayload,
+          payload,
+          info,
+          to: target,
+          deps: {
+            imessage: createIMessageEchoCachingSend({
+              client: getActiveClient(),
+              accountId: accountInfo.accountId,
+              sentMessageCache,
+            }),
+          },
+        });
+        if (durable) {
           return;
         }
         await deliverReplies({

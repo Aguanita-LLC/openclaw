@@ -1163,6 +1163,7 @@
                 "group": "Messages and delivery",
                 "pages": [
                   "concepts/messages",
+                  "concepts/message-lifecycle-refactor",
                   "concepts/streaming",
                   "concepts/progress-drafts",
                   "concepts/retry",

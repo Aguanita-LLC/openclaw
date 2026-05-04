@@ -270,7 +270,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
-      deliver: async (payload) => {
+      deliver: async (payload, _info) => {
         await deps.deliverReplies({
           cfg: deps.cfg,
           replies: [payload],

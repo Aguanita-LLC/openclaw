@@ -843,6 +843,7 @@ export async function deliverOutboundPayloads(
         replyToId: params.replyToId,
         replyToMode: params.replyToMode,
         formatting: params.formatting,
+        identity: params.identity,
         bestEffort: params.bestEffort,
         gifPlayback: params.gifPlayback,
         forceDocument: params.forceDocument,

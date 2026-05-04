@@ -606,6 +606,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           dispatchReplyWithBufferedBlockDispatcher:
             core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
           delivery: {
+            durable: false,
             deliver: async (payload: ReplyPayload) => {
               let replyText = payload.text;
               if (!replyText) {

@@ -18,6 +18,7 @@ const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
   vi.fn<(params: DispatchReplyWithBufferedBlockDispatcherArgs) => Promise<unknown>>(),
 );
 const deliverReplies = vi.hoisted(() => vi.fn());
+const deliverDurableInboundReplyPayload = vi.hoisted(() => vi.fn());
 const emitInternalMessageSentHook = vi.hoisted(() => vi.fn());
 const createForumTopicTelegram = vi.hoisted(() => vi.fn());
 const deleteMessageTelegram = vi.hoisted(() => vi.fn());
@@ -78,6 +79,15 @@ const resolveSessionStoreEntry = vi.hoisted(() =>
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
 }));
+
+vi.mock("openclaw/plugin-sdk/inbound-reply-dispatch", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/inbound-reply-dispatch")>();
+  return {
+    ...actual,
+    deliverDurableInboundReplyPayload,
+  };
+});
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
@@ -152,6 +162,8 @@ const telegramDepsForTest: TelegramBotDeps = {
   createTelegramDraftStream:
     createTelegramDraftStream as TelegramBotDeps["createTelegramDraftStream"],
   deliverReplies: deliverReplies as TelegramBotDeps["deliverReplies"],
+  deliverDurableInboundReplyPayload:
+    deliverDurableInboundReplyPayload as TelegramBotDeps["deliverDurableInboundReplyPayload"],
   emitInternalMessageSentHook:
     emitInternalMessageSentHook as TelegramBotDeps["emitInternalMessageSentHook"],
   editMessageTelegram: editMessageTelegram as TelegramBotDeps["editMessageTelegram"],
@@ -173,6 +185,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     createTelegramDraftStream.mockReset();
     dispatchReplyWithBufferedBlockDispatcher.mockReset();
     deliverReplies.mockReset();
+    deliverDurableInboundReplyPayload.mockReset();
     emitInternalMessageSentHook.mockReset();
     createForumTopicTelegram.mockReset();
     deleteMessageTelegram.mockReset();
@@ -209,6 +222,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       counts: { block: 0, final: 0, tool: 0 },
     });
     deliverReplies.mockResolvedValue({ delivered: true });
+    deliverDurableInboundReplyPayload.mockResolvedValue(null);
     emitInternalMessageSentHook.mockResolvedValue(undefined);
     createForumTopicTelegram.mockResolvedValue({ message_thread_id: 777 });
     deleteMessageTelegram.mockResolvedValue(true);
@@ -445,6 +459,53 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues final Telegram replies through outbound delivery when available", async () => {
+    deliverDurableInboundReplyPayload.mockResolvedValue({
+      messageIds: ["1001"],
+      visibleReplySent: true,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello queued" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          ChatType: "direct",
+          SenderId: "42",
+          SenderName: "Alice",
+          SenderUsername: "alice",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+    });
+
+    expect(deliverDurableInboundReplyPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123",
+        accountId: "default",
+        payload: expect.objectContaining({ text: "Hello queued" }),
+        info: { kind: "final" },
+        replyToMode: "first",
+        threadId: 777,
+        formatting: expect.objectContaining({ textLimit: 4096, tableMode: "preserve" }),
+        agentId: "default",
+        ctxPayload: expect.objectContaining({
+          SessionKey: "s1",
+          ChatType: "direct",
+          SenderId: "42",
+          SenderName: "Alice",
+          SenderUsername: "alice",
+        }),
+      }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("skips answer draft preview for same-chat selected quotes", async () => {

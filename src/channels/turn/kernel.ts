@@ -1,8 +1,14 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { clearHistoryEntriesIfEnabled } from "../../auto-reply/reply/history.js";
 import { EMPTY_CHANNEL_TURN_DISPATCH_COUNTS } from "./dispatch-result.js";
+import { deliverDurableInboundReplyPayload } from "./durable-delivery.js";
 export { buildChannelTurnContext, filterChannelTurnSupplementalContext } from "./context.js";
 export type { BuildChannelTurnContextParams } from "./context.js";
+export { deliverDurableInboundReplyPayload } from "./durable-delivery.js";
+export type {
+  DurableInboundReplyDeliveryOptions,
+  DurableInboundReplyDeliveryParams,
+} from "./durable-delivery.js";
 import type {
   AssembledChannelTurn,
   ChannelEventClass,
@@ -145,7 +151,22 @@ export async function dispatchAssembledChannelTurn(
           dispatcherOptions: {
             ...params.dispatcherOptions,
             deliver: async (payload: ReplyPayload, info) => {
-              await params.delivery.deliver(payload, info);
+              if (params.delivery.durable) {
+                const durable = await deliverDurableInboundReplyPayload({
+                  cfg: params.cfg,
+                  channel: params.channel,
+                  accountId: params.accountId,
+                  agentId: params.agentId,
+                  ctxPayload: params.ctxPayload,
+                  payload,
+                  info,
+                  ...params.delivery.durable,
+                });
+                if (durable) {
+                  return durable;
+                }
+              }
+              return await params.delivery.deliver(payload, info);
             },
             onError: params.delivery.onError,
           },

@@ -28,6 +28,10 @@
     "target": "OpenClaw 应用 SDK API 设计"
   },
   {
+    "source": "Message lifecycle refactor",
+    "target": "消息生命周期重构"
+  },
+  {
     "source": "Azure Speech",
     "target": "Azure Speech"
   },

@@ -12,12 +12,25 @@ type CapturedReplyPayload = {
   mediaUrls?: string[];
 };
 
-const { dispatchReplyWithBufferedBlockDispatcherMock } = vi.hoisted(() => ({
-  dispatchReplyWithBufferedBlockDispatcherMock: vi.fn(async (params: { ctx: unknown }) => {
-    capturedDispatchParams = params;
-    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-  }),
-}));
+const { dispatchReplyWithBufferedBlockDispatcherMock, deliverDurableInboundReplyPayloadMock } =
+  vi.hoisted(() => ({
+    dispatchReplyWithBufferedBlockDispatcherMock: vi.fn(async (params: { ctx: unknown }) => {
+      capturedDispatchParams = params;
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    }),
+    deliverDurableInboundReplyPayloadMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(
+      async () => null,
+    ),
+  }));
+
+vi.mock("openclaw/plugin-sdk/inbound-reply-dispatch", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/inbound-reply-dispatch")>();
+  return {
+    ...actual,
+    deliverDurableInboundReplyPayload: deliverDurableInboundReplyPayloadMock,
+  };
+});
 
 vi.mock("./runtime-api.js", () => ({
   dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherMock,
@@ -233,6 +246,8 @@ describe("whatsapp inbound dispatch", () => {
   beforeEach(() => {
     capturedDispatchParams = undefined;
     dispatchReplyWithBufferedBlockDispatcherMock.mockClear();
+    deliverDurableInboundReplyPayloadMock.mockReset();
+    deliverDurableInboundReplyPayloadMock.mockResolvedValue(null);
   });
 
   it("builds a finalized inbound context payload", () => {
@@ -511,6 +526,88 @@ describe("whatsapp inbound dispatch", () => {
     await deliver?.({ text: "final payload" }, { kind: "final" });
     expect(deliverReply).toHaveBeenCalledTimes(4);
     expect(rememberSentText).toHaveBeenCalledTimes(4);
+  });
+
+  it("queues final WhatsApp payloads through durable outbound delivery", async () => {
+    deliverDurableInboundReplyPayloadMock.mockResolvedValueOnce({
+      messageIds: ["wa-1"],
+      visibleReplySent: true,
+    });
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      context: { Body: "incoming", SessionKey: "agent:main:whatsapp:+15551234567" },
+      deliverReply,
+      rememberSentText,
+      route: makeRoute({
+        accountId: "default",
+        agentId: "main",
+        sessionKey: "agent:main:whatsapp:+15551234567",
+      }),
+    });
+
+    const deliver = getCapturedDeliver();
+    await deliver?.({ text: "final payload" }, { kind: "final" });
+
+    expect(deliverDurableInboundReplyPayloadMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        accountId: "default",
+        agentId: "main",
+        to: "+1000",
+        payload: expect.objectContaining({ text: "final payload" }),
+        info: { kind: "final" },
+        ctxPayload: expect.objectContaining({
+          SessionKey: "agent:main:whatsapp:+15551234567",
+        }),
+      }),
+    );
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).toHaveBeenCalledWith(
+      "final payload",
+      expect.objectContaining({
+        combinedBody: "incoming",
+        combinedBodySessionKey: "agent:main:whatsapp:+15551234567",
+      }),
+    );
+  });
+
+  it("keeps media replies on the WhatsApp owner delivery path", async () => {
+    deliverDurableInboundReplyPayloadMock.mockResolvedValueOnce({
+      messageIds: ["wa-1"],
+      visibleReplySent: true,
+    });
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      deliverReply,
+      rememberSentText,
+    });
+
+    const deliver = getCapturedDeliver();
+    await deliver?.(
+      { text: "generated image", mediaUrls: ["/tmp/generated.jpg"] },
+      { kind: "final" },
+    );
+
+    expect(deliverDurableInboundReplyPayloadMock).not.toHaveBeenCalled();
+    expect(deliverReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          mediaUrls: ["/tmp/generated.jpg"],
+          text: "generated image",
+        }),
+      }),
+    );
+    expect(rememberSentText).toHaveBeenCalledWith(
+      "generated image",
+      expect.objectContaining({
+        combinedBody: "hi",
+        combinedBodySessionKey: "agent:main:whatsapp:direct:+1000",
+      }),
+    );
   });
 
   it("normalizes WhatsApp payload text before delivery and echo bookkeeping", async () => {
