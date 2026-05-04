@@ -4304,6 +4304,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     );
     deliverReplies.mockResolvedValue({ delivered: true });
+    deliverDurableInboundReplyPayload.mockResolvedValue({
+      messageIds: ["2002"],
+      visibleReplySent: true,
+    });
     const preConnectErr = new Error("connect ECONNREFUSED 149.154.167.220:443");
     (preConnectErr as NodeJS.ErrnoException).code = "ECONNREFUSED";
     editMessageTelegram.mockRejectedValue(preConnectErr);
@@ -4311,13 +4315,20 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(editMessageTelegram).toHaveBeenCalledTimes(1);
-    const deliverCalls = deliverReplies.mock.calls;
-    const finalTextSentViaDeliverReplies = deliverCalls.some((call: unknown[]) =>
-      (call[0] as { replies?: Array<{ text?: string }> })?.replies?.some(
-        (r: { text?: string }) => r.text === "Final answer",
-      ),
+    expect(deliverDurableInboundReplyPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123",
+        accountId: "default",
+        agentId: "default",
+        payload: expect.objectContaining({ text: "Final answer" }),
+        info: { kind: "final" },
+        replyToMode: "first",
+        threadId: 777,
+        formatting: expect.objectContaining({ textLimit: 4096, tableMode: "preserve" }),
+      }),
     );
-    expect(finalTextSentViaDeliverReplies).toBe(true);
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("falls back when Telegram reports the current final edit target missing", async () => {

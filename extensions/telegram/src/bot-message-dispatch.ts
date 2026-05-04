@@ -797,15 +797,47 @@ export const dispatchTelegramMessage = async ({
       return { ...payload, replyToId: implicitQuoteReplyTargetId };
     };
     let lastVisibleNonPreviewDeliveryAtMs: number | undefined;
-    const sendPayload = async (payload: ReplyPayload) => {
+    const sendPayload = async (
+      payload: ReplyPayload,
+      options?: { durable?: boolean; silent?: boolean },
+    ) => {
       if (isDispatchSuperseded()) {
         return false;
       }
+      const deliverablePayload = applyQuoteReplyTarget(payload);
+      const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
+      if (options?.durable) {
+        const durable = await (telegramDeps.deliverDurableInboundReplyPayload ?? null)?.({
+          cfg,
+          channel: "telegram",
+          to: String(chatId),
+          accountId: route.accountId,
+          agentId: route.agentId,
+          ctxPayload,
+          payload: deliverablePayload,
+          info: { kind: "final" },
+          replyToMode,
+          threadId: threadSpec.id,
+          formatting: {
+            textLimit,
+            tableMode,
+            chunkMode,
+          },
+          silent,
+        });
+        if (durable) {
+          if (durable.visibleReplySent) {
+            deliveryState.markDelivered();
+            lastVisibleNonPreviewDeliveryAtMs = Date.now();
+          }
+          return durable.visibleReplySent;
+        }
+      }
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         ...deliveryBaseOptions,
-        replies: [applyQuoteReplyTarget(payload)],
+        replies: [deliverablePayload],
         onVoiceRecording: sendRecordVoice,
-        silent: silentErrorReplies && payload.isError === true,
+        silent,
         mediaLoader: telegramDeps.loadWebMedia,
       });
       if (result.delivered) {

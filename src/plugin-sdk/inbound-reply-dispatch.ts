@@ -132,6 +132,7 @@ export async function dispatchInboundReplyWithBase(
   await recordInboundSessionAndDispatchReply({
     ...dispatchBase,
     deliver: params.deliver,
+    durable: params.durable,
     onRecordError: params.onRecordError,
     onDispatchError: params.onDispatchError,
     replyOptions: params.replyOptions,

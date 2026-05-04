@@ -1,9 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { RecordInboundSession } from "../channels/session.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+
+const deliverDurableInboundReplyPayload = vi.hoisted(() => vi.fn());
+
+vi.mock("../channels/turn/kernel.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/turn/kernel.js")>();
+  return {
+    ...actual,
+    deliverDurableInboundReplyPayload,
+  };
+});
+
 import {
+  dispatchInboundReplyWithBase,
   hasFinalInboundReplyDispatch,
   hasVisibleInboundReplyDispatch,
   recordInboundSessionAndDispatchReply,
@@ -11,6 +23,10 @@ import {
 } from "./inbound-reply-dispatch.js";
 
 describe("recordInboundSessionAndDispatchReply", () => {
+  beforeEach(() => {
+    deliverDurableInboundReplyPayload.mockReset();
+  });
+
   it("delegates record and dispatch through the channel turn kernel once", async () => {
     const recordInboundSession = vi.fn(async () => undefined) as unknown as RecordInboundSession;
     const deliver = vi.fn(async () => undefined);
@@ -113,6 +129,68 @@ describe("recordInboundSessionAndDispatchReply", () => {
       sensitiveMedia: undefined,
       replyToId: undefined,
     });
+  });
+
+  it("forwards durable delivery options through the SDK convenience wrapper", async () => {
+    deliverDurableInboundReplyPayload.mockResolvedValue({
+      messageIds: ["queued-1"],
+      visibleReplySent: true,
+    });
+    const recordInboundSession = vi.fn(async () => undefined) as unknown as RecordInboundSession;
+    const deliver = vi.fn(async () => undefined);
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
+      await params.dispatcherOptions.deliver({ text: "hello durable" }, { kind: "final" });
+      return {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+      };
+    }) as DispatchReplyWithBufferedBlockDispatcher;
+    const ctxPayload = {
+      Body: "body",
+      RawBody: "body",
+      CommandBody: "body",
+      From: "sender",
+      To: "123",
+      OriginatingTo: "123",
+      SessionKey: "agent:main:telegram:peer",
+      Provider: "telegram",
+      Surface: "telegram",
+    } as FinalizedMsgContext;
+
+    await dispatchInboundReplyWithBase({
+      cfg: {} as OpenClawConfig,
+      channel: "telegram",
+      accountId: "default",
+      route: {
+        agentId: "main",
+        sessionKey: "agent:main:telegram:peer",
+      },
+      storePath: "/tmp/sessions.json",
+      ctxPayload,
+      core: {
+        channel: {
+          session: { recordInboundSession },
+          reply: { dispatchReplyWithBufferedBlockDispatcher },
+        },
+      },
+      deliver,
+      durable: { replyToMode: "first" },
+      onRecordError: vi.fn(),
+      onDispatchError: vi.fn(),
+    });
+
+    expect(deliverDurableInboundReplyPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        accountId: "default",
+        agentId: "main",
+        ctxPayload,
+        payload: expect.objectContaining({ text: "hello durable" }),
+        info: { kind: "final" },
+        replyToMode: "first",
+      }),
+    );
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("exports shared visible reply dispatch helpers", () => {
