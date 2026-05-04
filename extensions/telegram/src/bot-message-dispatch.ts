@@ -827,11 +827,12 @@ export const dispatchTelegramMessage = async ({
           silent,
         });
         if (durable) {
-          if (durable.visibleReplySent) {
+          const visibleReplySent = durable.visibleReplySent === true;
+          if (visibleReplySent) {
             deliveryState.markDelivered();
             lastVisibleNonPreviewDeliveryAtMs = Date.now();
           }
-          return durable.visibleReplySent;
+          return visibleReplySent;
         }
       }
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
