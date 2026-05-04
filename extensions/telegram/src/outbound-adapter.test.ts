@@ -123,6 +123,28 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
   });
 
+  it("forwards silent delivery options to Telegram sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-silent", chatId: "12345" });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "quiet",
+      payload: { text: "quiet" },
+      silent: true,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "quiet",
+      expect.objectContaining({
+        silent: true,
+      }),
+    );
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-silent", chatId: "12345" });
+  });
+
   it("forwards audioAsVoice payload media to Telegram voice sends", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-voice", chatId: "12345" });
 

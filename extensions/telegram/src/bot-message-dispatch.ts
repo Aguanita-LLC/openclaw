@@ -796,6 +796,12 @@ export const dispatchTelegramMessage = async ({
       }
       return { ...payload, replyToId: implicitQuoteReplyTargetId };
     };
+    const usesNativeTelegramQuote = (payload: ReplyPayload): boolean => {
+      if (replyQuoteText != null) {
+        return true;
+      }
+      return payload.replyToId != null && replyQuoteByMessageId[String(payload.replyToId)] != null;
+    };
     let lastVisibleNonPreviewDeliveryAtMs: number | undefined;
     const sendPayload = async (
       payload: ReplyPayload,
@@ -807,7 +813,7 @@ export const dispatchTelegramMessage = async ({
       const deliverablePayload = applyQuoteReplyTarget(payload);
       const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
       const durableDelivery = telegramDeps.deliverDurableInboundReplyPayload;
-      if (options?.durable && durableDelivery) {
+      if (options?.durable && durableDelivery && !usesNativeTelegramQuote(deliverablePayload)) {
         const durable = await durableDelivery({
           cfg,
           channel: "telegram",

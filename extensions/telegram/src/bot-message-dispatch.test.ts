@@ -509,6 +509,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("skips answer draft preview for same-chat selected quotes", async () => {
+    deliverDurableInboundReplyPayload.mockResolvedValue({
+      messageIds: ["durable-quote-regression"],
+      visibleReplySent: true,
+    });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
       return { queuedFinal: true };
@@ -538,6 +542,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replyQuoteText: " quoted slice\n",
       }),
     );
+    expect(deliverDurableInboundReplyPayload).not.toHaveBeenCalled();
   });
 
   it("keeps answer draft preview for current message replies with native quote candidates", async () => {
@@ -1124,6 +1129,32 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replies: [expect.objectContaining({ isError: true })],
       }),
     );
+  });
+
+  it("queues silent error replies through durable delivery with silent preserved", async () => {
+    deliverDurableInboundReplyPayload.mockResolvedValue({
+      messageIds: ["durable-silent"],
+      visibleReplySent: true,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "oops", isError: true }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { silentErrorReplies: true },
+    });
+
+    expect(deliverDurableInboundReplyPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        payload: expect.objectContaining({ isError: true }),
+        silent: true,
+      }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("keeps error replies notifying by default", async () => {
