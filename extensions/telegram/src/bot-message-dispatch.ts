@@ -806,8 +806,9 @@ export const dispatchTelegramMessage = async ({
       }
       const deliverablePayload = applyQuoteReplyTarget(payload);
       const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
-      if (options?.durable) {
-        const durable = await (telegramDeps.deliverDurableInboundReplyPayload ?? null)?.({
+      const durableDelivery = telegramDeps.deliverDurableInboundReplyPayload;
+      if (options?.durable && durableDelivery) {
+        const durable = await durableDelivery({
           cfg,
           channel: "telegram",
           to: String(chatId),
