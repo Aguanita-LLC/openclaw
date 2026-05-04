@@ -800,7 +800,7 @@ export const dispatchTelegramMessage = async ({
       if (replyQuoteText != null) {
         return true;
       }
-      return payload.replyToId != null && replyQuoteByMessageId[String(payload.replyToId)] != null;
+      return payload.replyToId != null && replyQuoteByMessageId[payload.replyToId] != null;
     };
     let lastVisibleNonPreviewDeliveryAtMs: number | undefined;
     const sendPayload = async (
