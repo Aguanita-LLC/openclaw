@@ -10,6 +10,8 @@ function isHttpProxyUrl(value: string): boolean {
   }
 }
 
+export const ProxyLoopbackModeSchema = z.enum(["gateway-only", "proxy", "block"]);
+
 export const ProxyConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -21,6 +23,7 @@ export const ProxyConfigSchema = z
       })
       .register(sensitive)
       .optional(),
+    loopbackMode: ProxyLoopbackModeSchema.optional(),
   })
   .strict()
   .optional();

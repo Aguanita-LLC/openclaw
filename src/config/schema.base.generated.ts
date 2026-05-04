@@ -24271,6 +24271,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "string",
             format: "uri",
           },
+          loopbackMode: {
+            type: "string",
+            enum: ["gateway-only", "proxy", "block"],
+          },
         },
         additionalProperties: false,
       },
