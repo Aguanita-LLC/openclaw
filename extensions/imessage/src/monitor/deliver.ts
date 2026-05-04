@@ -87,7 +87,8 @@ export function createIMessageEchoCachingSend(params: {
   sentMessageCache?: Pick<SentMessageCache, "remember">;
 }): typeof sendMessageIMessage {
   return async (target, text, opts) => {
-    const sent = await sendMessageIMessage(target, text, {
+    const sanitizedText = sanitizeOutboundText(text);
+    const sent = await sendMessageIMessage(target, sanitizedText, {
       ...opts,
       client: params.client,
     });

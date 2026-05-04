@@ -157,6 +157,34 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("sanitizes durable outbound text before sending", async () => {
+    const remember = vi.fn();
+    const send = createIMessageEchoCachingSend({
+      client,
+      accountId: "acct-6",
+      sentMessageCache: { remember },
+    });
+    sendMessageIMessageMock.mockResolvedValueOnce({
+      messageId: "imsg-durable-2",
+      sentText: "Visible reply",
+    });
+
+    await send("chat_id:60", "<thinking>hidden</thinking>\nVisible reply\nassistant:", {
+      config: IMESSAGE_TEST_CFG,
+      accountId: "acct-ignored",
+    });
+
+    expect(sendMessageIMessageMock).toHaveBeenCalledWith(
+      "chat_id:60",
+      "Visible reply",
+      expect.objectContaining({ client }),
+    );
+    expect(remember).toHaveBeenCalledWith("acct-6:chat_id:60", {
+      text: "Visible reply",
+      messageId: "imsg-durable-2",
+    });
+  });
+
   it("records outbound text and message ids in sent-message cache (post-send only)", async () => {
     // Fix for #47830: remember() is called ONLY after each chunk is sent,
     // never with the full un-chunked text before sending begins.

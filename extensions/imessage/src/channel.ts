@@ -27,6 +27,7 @@ import {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
 } from "./group-policy.js";
+import { sanitizeOutboundText } from "./monitor/sanitize-outbound.js";
 import type { IMessageProbe } from "./probe.js";
 import { imessageSetupAdapter } from "./setup-core.js";
 import {
@@ -244,7 +245,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         chunker: chunkTextForOutbound,
         chunkerMode: "text",
         textChunkLimit: 4000,
-        sanitizeText: ({ text }) => sanitizeForPlainText(text),
+        sanitizeText: ({ text }) => sanitizeForPlainText(sanitizeOutboundText(text)),
       },
       attachedResults: {
         channel: "imessage",
