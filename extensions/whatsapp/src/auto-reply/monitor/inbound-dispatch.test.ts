@@ -573,6 +573,33 @@ describe("whatsapp inbound dispatch", () => {
     );
   });
 
+  it("does not fall back when durable WhatsApp delivery suppresses a send", async () => {
+    deliverDurableInboundReplyPayloadMock.mockResolvedValueOnce({
+      messageIds: [],
+      visibleReplySent: false,
+    });
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      deliverReply,
+      rememberSentText,
+    });
+
+    const deliver = getCapturedDeliver();
+    await deliver?.({ text: "cancelled by hook" }, { kind: "final" });
+
+    expect(deliverDurableInboundReplyPayloadMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        payload: expect.objectContaining({ text: "cancelled by hook" }),
+        info: { kind: "final" },
+      }),
+    );
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
   it("keeps media replies on the WhatsApp owner delivery path", async () => {
     deliverDurableInboundReplyPayloadMock.mockResolvedValueOnce({
       messageIds: ["wa-1"],

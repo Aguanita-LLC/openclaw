@@ -381,14 +381,16 @@ export async function dispatchWhatsAppBufferedReply(params: {
               chunkMode,
             },
           });
-          if (durable?.visibleReplySent) {
-            didSendReply = true;
-            const shouldLog = normalizedDeliveryPayload.text ? true : undefined;
-            params.rememberSentText(normalizedDeliveryPayload.text, {
-              combinedBody: params.context.Body as string | undefined,
-              combinedBodySessionKey: params.route.sessionKey,
-              logVerboseMessage: shouldLog,
-            });
+          if (durable != null) {
+            if (durable.visibleReplySent) {
+              didSendReply = true;
+              const shouldLog = normalizedDeliveryPayload.text ? true : undefined;
+              params.rememberSentText(normalizedDeliveryPayload.text, {
+                combinedBody: params.context.Body as string | undefined,
+                combinedBodySessionKey: params.route.sessionKey,
+                logVerboseMessage: shouldLog,
+              });
+            }
             return;
           }
         }
