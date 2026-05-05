@@ -136,43 +136,44 @@ export async function deliverDurableInboundReplyPayload(
   const replyToId = resolveReplyToId(params);
   const threadId = resolveThreadId(params);
   let deliveryIntent: ChannelDeliveryResult["deliveryIntent"];
-  const results = await deliverOutboundPayloads({
+  const session = buildOutboundSessionContext({
     cfg: params.cfg,
-    channel,
-    to,
-    accountId: params.accountId,
-    payloads: [params.payload],
-    threadId,
-    replyToId,
-    replyToMode: params.replyToMode,
-    formatting: params.formatting,
-    identity: params.identity,
-    deps: params.deps,
-    mediaAccess: params.mediaAccess,
-    silent: params.silent,
-    session: buildOutboundSessionContext({
-      cfg: params.cfg,
-      sessionKey: params.ctxPayload.SessionKey,
-      policySessionKey: params.ctxPayload.RuntimePolicySessionKey,
-      conversationType: params.ctxPayload.ChatType,
-      agentId: params.agentId,
-      requesterAccountId: params.accountId ?? params.ctxPayload.AccountId,
-      requesterSenderId: params.ctxPayload.SenderId ?? params.ctxPayload.From,
-      requesterSenderName: params.ctxPayload.SenderName,
-      requesterSenderUsername: params.ctxPayload.SenderUsername,
-      requesterSenderE164: params.ctxPayload.SenderE164,
-    }),
-    gatewayClientScopes: params.ctxPayload.GatewayClientScopes,
-    queuePolicy: "required",
-    onDeliveryIntent: (intent) => {
-      deliveryIntent = toDeliveryIntent(intent);
-    },
-  }).catch((err: unknown) => {
-    return { status: "failed" as const, error: err };
+    sessionKey: params.ctxPayload.SessionKey,
+    policySessionKey: params.ctxPayload.RuntimePolicySessionKey,
+    conversationType: params.ctxPayload.ChatType,
+    agentId: params.agentId,
+    requesterAccountId: params.accountId ?? params.ctxPayload.AccountId,
+    requesterSenderId: params.ctxPayload.SenderId ?? params.ctxPayload.From,
+    requesterSenderName: params.ctxPayload.SenderName,
+    requesterSenderUsername: params.ctxPayload.SenderUsername,
+    requesterSenderE164: params.ctxPayload.SenderE164,
   });
 
-  if (!Array.isArray(results)) {
-    return results;
+  let results: Awaited<ReturnType<typeof deliverOutboundPayloads>>;
+  try {
+    results = await deliverOutboundPayloads({
+      cfg: params.cfg,
+      channel,
+      to,
+      accountId: params.accountId,
+      payloads: [params.payload],
+      threadId,
+      replyToId,
+      replyToMode: params.replyToMode,
+      formatting: params.formatting,
+      identity: params.identity,
+      deps: params.deps,
+      mediaAccess: params.mediaAccess,
+      silent: params.silent,
+      session,
+      gatewayClientScopes: params.ctxPayload.GatewayClientScopes,
+      queuePolicy: "required",
+      onDeliveryIntent: (intent) => {
+        deliveryIntent = toDeliveryIntent(intent);
+      },
+    });
+  } catch (err: unknown) {
+    return { status: "failed" as const, error: err };
   }
 
   const messageIds = collectMessageIds(results);
