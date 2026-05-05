@@ -79,14 +79,6 @@ function collectMessageIds(results: Awaited<ReturnType<typeof deliverOutboundPay
   return results.map((result) => result.messageId).filter((id) => id.length > 0);
 }
 
-function isMissingOutboundHandlerError(err: unknown, channel: string): boolean {
-  return err instanceof Error && err.message === `Outbound not configured for channel: ${channel}`;
-}
-
-function hasDurableRequirements(requirements?: DurableFinalDeliveryRequirements): boolean {
-  return Object.values(requirements ?? {}).some(Boolean);
-}
-
 function toDeliveryIntent(intent: OutboundDeliveryIntent): ChannelDeliveryResult["deliveryIntent"] {
   return {
     id: intent.id,
@@ -128,19 +120,17 @@ export async function deliverDurableInboundReplyPayload(
     return { status: "unsupported", reason: "missing_target" };
   }
 
-  if (hasDurableRequirements(params.requiredCapabilities)) {
-    const support = await resolveOutboundDurableFinalDeliverySupport({
-      cfg: params.cfg,
-      channel,
-      requirements: params.requiredCapabilities,
-    });
-    if (!support.ok) {
-      return {
-        status: "unsupported",
-        reason: support.reason,
-        ...(support.capability ? { capability: support.capability } : {}),
-      };
-    }
+  const support = await resolveOutboundDurableFinalDeliverySupport({
+    cfg: params.cfg,
+    channel,
+    requirements: params.requiredCapabilities,
+  });
+  if (!support.ok) {
+    return {
+      status: "unsupported",
+      reason: support.reason,
+      ...(support.capability ? { capability: support.capability } : {}),
+    };
   }
 
   const replyToId = resolveReplyToId(params);
@@ -178,9 +168,6 @@ export async function deliverDurableInboundReplyPayload(
       deliveryIntent = toDeliveryIntent(intent);
     },
   }).catch((err: unknown) => {
-    if (isMissingOutboundHandlerError(err, channel)) {
-      return { status: "unsupported" as const, reason: "missing_outbound_handler" as const };
-    }
     return { status: "failed" as const, error: err };
   });
 
