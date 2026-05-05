@@ -813,7 +813,7 @@ export const dispatchTelegramMessage = async ({
       const deliverablePayload = applyQuoteReplyTarget(payload);
       const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
       const durableDelivery = telegramDeps.deliverDurableInboundReplyPayload;
-      if (options?.durable && durableDelivery && !usesNativeTelegramQuote(deliverablePayload)) {
+      if (options?.durable && durableDelivery) {
         const durable = await durableDelivery({
           cfg,
           channel: "telegram",
@@ -831,14 +831,26 @@ export const dispatchTelegramMessage = async ({
             chunkMode,
           },
           silent,
+          requiredCapabilities: {
+            text: true,
+            payload: true,
+            replyTo: deliverablePayload.replyToId != null,
+            thread: threadSpec.id != null,
+            silent,
+            nativeQuote: usesNativeTelegramQuote(deliverablePayload),
+            messageSendingHooks: true,
+          },
         });
-        if (durable) {
-          const visibleReplySent = durable.visibleReplySent === true;
-          if (visibleReplySent) {
-            deliveryState.markDelivered();
-            lastVisibleNonPreviewDeliveryAtMs = Date.now();
-          }
-          return visibleReplySent;
+        if (durable.status === "failed") {
+          throw durable.error;
+        }
+        if (durable.status === "handled_visible") {
+          deliveryState.markDelivered();
+          lastVisibleNonPreviewDeliveryAtMs = Date.now();
+          return true;
+        }
+        if (durable.status === "handled_no_send") {
+          return false;
         }
       }
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({

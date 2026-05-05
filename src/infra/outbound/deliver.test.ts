@@ -100,6 +100,7 @@ type DeliverModule = typeof import("./deliver.js");
 
 let deliverOutboundPayloads: DeliverModule["deliverOutboundPayloads"];
 let normalizeOutboundPayloads: DeliverModule["normalizeOutboundPayloads"];
+let resolveOutboundDurableFinalDeliverySupport: DeliverModule["resolveOutboundDurableFinalDeliverySupport"];
 
 const matrixChunkConfig: OpenClawConfig = {
   channels: { matrix: { textChunkLimit: 4000 } } as OpenClawConfig["channels"],
@@ -256,7 +257,11 @@ function expectSuccessfulMatrixInternalHookPayload(
 
 describe("deliverOutboundPayloads", () => {
   beforeAll(async () => {
-    ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
+    ({
+      deliverOutboundPayloads,
+      normalizeOutboundPayloads,
+      resolveOutboundDurableFinalDeliverySupport,
+    } = await import("./deliver.js"));
   });
 
   beforeEach(() => {
@@ -291,6 +296,62 @@ describe("deliverOutboundPayloads", () => {
     resetDiagnosticEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
+  });
+
+  it("reports unsupported durable final delivery when required capabilities are missing", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async () => ({ messageId: "m1" }),
+              deliveryCapabilities: {
+                durableFinal: {
+                  text: true,
+                },
+              },
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      resolveOutboundDurableFinalDeliverySupport({
+        cfg: {},
+        channel: "matrix",
+        requirements: {
+          text: true,
+          silent: true,
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "capability_mismatch",
+      capability: "silent",
+    });
+  });
+
+  it("requires durable queue writes when requested", async () => {
+    queueMocks.enqueueDelivery.mockRejectedValueOnce(new Error("queue offline"));
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hi" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("queue offline");
+
+    expect(sendMatrix).not.toHaveBeenCalled();
   });
 
   it("emits bounded delivery diagnostics for successful outbound sends", async () => {

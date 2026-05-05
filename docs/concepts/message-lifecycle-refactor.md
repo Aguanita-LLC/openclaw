@@ -715,6 +715,20 @@ durable path is enabled only by an explicit policy/options value. `durable:
 false` can remain as a compatibility spelling, but implementation should not
 require every unmigrated channel to add it.
 
+Current bridge code must keep the durability decision explicit:
+
+- Durable final delivery returns a discriminated status. `handled_visible` and
+  `handled_no_send` are terminal; `unsupported` and `not_applicable` may fall
+  back to channel-owned delivery; `failed` propagates the send failure.
+- Generic durable final delivery is gated by adapter capabilities such as
+  silent delivery, reply target preservation, native quote preservation, and
+  message-sending hooks. Missing parity should choose channel-owned delivery,
+  not a generic send that changes user-visible behavior.
+- Queue-backed durable sends expose a delivery intent reference. Existing
+  `pendingFinalDelivery*` session fields can carry the intent id during the
+  transition; the end state is a `MessageSendIntent` store instead of frozen
+  reply text plus ad hoc context fields.
+
 Do not enable the generic durable path for a channel until all of these are
 true:
 

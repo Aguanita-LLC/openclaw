@@ -138,6 +138,17 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   },
   deliveryCapabilities: {
     pin: true,
+    durableFinal: {
+      text: true,
+      media: true,
+      payload: true,
+      silent: true,
+      replyTo: true,
+      thread: true,
+      nativeQuote: false,
+      messageSendingHooks: true,
+      batch: true,
+    },
   },
   renderPresentation: ({ payload, presentation }) => ({
     ...payload,

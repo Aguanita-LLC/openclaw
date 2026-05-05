@@ -133,8 +133,11 @@ describe("recordInboundSessionAndDispatchReply", () => {
 
   it("forwards durable delivery options through the SDK convenience wrapper", async () => {
     deliverDurableInboundReplyPayload.mockResolvedValue({
-      messageIds: ["queued-1"],
-      visibleReplySent: true,
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["queued-1"],
+        visibleReplySent: true,
+      },
     });
     const recordInboundSession = vi.fn(async () => undefined) as unknown as RecordInboundSession;
     const deliver = vi.fn(async () => undefined);

@@ -380,17 +380,26 @@ export async function dispatchWhatsAppBufferedReply(params: {
               tableMode,
               chunkMode,
             },
+            requiredCapabilities: {
+              text: true,
+              replyTo: normalizedDeliveryPayload.replyToId != null,
+              messageSendingHooks: true,
+            },
           });
-          if (durable != null) {
-            if (durable.visibleReplySent) {
-              didSendReply = true;
-              const shouldLog = normalizedDeliveryPayload.text ? true : undefined;
-              params.rememberSentText(normalizedDeliveryPayload.text, {
-                combinedBody: params.context.Body as string | undefined,
-                combinedBodySessionKey: params.route.sessionKey,
-                logVerboseMessage: shouldLog,
-              });
-            }
+          if (durable.status === "failed") {
+            throw durable.error;
+          }
+          if (durable.status === "handled_visible") {
+            didSendReply = true;
+            const shouldLog = normalizedDeliveryPayload.text ? true : undefined;
+            params.rememberSentText(normalizedDeliveryPayload.text, {
+              combinedBody: params.context.Body as string | undefined,
+              combinedBodySessionKey: params.route.sessionKey,
+              logVerboseMessage: shouldLog,
+            });
+            return;
+          }
+          if (durable.status === "handled_no_send") {
             return;
           }
         }

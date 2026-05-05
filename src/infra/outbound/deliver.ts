@@ -2,6 +2,7 @@ import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type {
+  ChannelDeliveryCapabilities,
   ChannelOutboundAdapter,
   ChannelOutboundContext,
   ChannelOutboundPayloadContext,
@@ -64,6 +65,32 @@ export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
 export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
+
+export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
+
+export type OutboundDeliveryIntent = {
+  id: string;
+  channel: Exclude<OutboundChannel, "none">;
+  to: string;
+  accountId?: string;
+  queuePolicy: OutboundDeliveryQueuePolicy;
+};
+
+export type DurableFinalDeliveryRequirement = keyof NonNullable<
+  ChannelDeliveryCapabilities["durableFinal"]
+>;
+
+export type DurableFinalDeliveryRequirements = Partial<
+  Record<DurableFinalDeliveryRequirement, boolean>
+>;
+
+export type OutboundDurableDeliverySupport =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: "missing_outbound_handler" | "capability_mismatch";
+      capability?: DurableFinalDeliveryRequirement;
+    };
 
 const log = createSubsystemLogger("outbound/deliver");
 let transcriptRuntimePromise:
@@ -153,21 +180,25 @@ async function resolveChannelOutboundDirectiveOptions(params: {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
 }): Promise<{ extractMarkdownImages?: boolean }> {
-  let outbound = await loadChannelOutboundAdapter(params.channel);
-  if (!outbound) {
-    const { bootstrapOutboundChannelPlugin } = await loadChannelBootstrapRuntime();
-    bootstrapOutboundChannelPlugin({
-      channel: params.channel,
-      cfg: params.cfg,
-    });
-    outbound = await loadChannelOutboundAdapter(params.channel);
-  }
+  const outbound = await loadBootstrappedOutboundAdapter(params);
   return {
     extractMarkdownImages: outbound?.extractMarkdownImages === true ? true : undefined,
   };
 }
 
 async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
+  const outbound = await loadBootstrappedOutboundAdapter(params);
+  const handler = createPluginHandler({ ...params, outbound });
+  if (!handler) {
+    throw new Error(`Outbound not configured for channel: ${params.channel}`);
+  }
+  return handler;
+}
+
+async function loadBootstrappedOutboundAdapter(params: {
+  cfg: OpenClawConfig;
+  channel: Exclude<OutboundChannel, "none">;
+}): Promise<ChannelOutboundAdapter | undefined> {
   let outbound = await loadChannelOutboundAdapter(params.channel);
   if (!outbound) {
     const { bootstrapOutboundChannelPlugin } = await loadChannelBootstrapRuntime();
@@ -177,11 +208,29 @@ async function createChannelHandler(params: ChannelHandlerParams): Promise<Chann
     });
     outbound = await loadChannelOutboundAdapter(params.channel);
   }
-  const handler = createPluginHandler({ ...params, outbound });
-  if (!handler) {
-    throw new Error(`Outbound not configured for channel: ${params.channel}`);
+  return outbound;
+}
+
+export async function resolveOutboundDurableFinalDeliverySupport(params: {
+  cfg: OpenClawConfig;
+  channel: Exclude<OutboundChannel, "none">;
+  requirements?: DurableFinalDeliveryRequirements;
+}): Promise<OutboundDurableDeliverySupport> {
+  const outbound = await loadBootstrappedOutboundAdapter(params);
+  if (!outbound?.sendText) {
+    return { ok: false, reason: "missing_outbound_handler" };
   }
-  return handler;
+
+  const durableFinal = outbound.deliveryCapabilities?.durableFinal;
+  for (const [capability, required] of Object.entries(params.requirements ?? {}) as Array<
+    [DurableFinalDeliveryRequirement, boolean | undefined]
+  >) {
+    if (required === true && durableFinal?.[capability] !== true) {
+      return { ok: false, reason: "capability_mismatch", capability };
+    }
+  }
+
+  return { ok: true };
 }
 
 function createPluginHandler(
@@ -383,6 +432,8 @@ function collectPayloadMediaSources(plan: readonly OutboundPayloadPlan[]): strin
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
+  queuePolicy?: OutboundDeliveryQueuePolicy;
+  onDeliveryIntent?: (intent: OutboundDeliveryIntent) => void;
 };
 
 type MessageSentEvent = {
@@ -830,6 +881,7 @@ export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { channel, to, payloads } = params;
+  const queuePolicy = params.queuePolicy ?? "best_effort";
 
   // Write-ahead delivery queue: persist before sending, remove after success.
   const queueId = params.skipQueue
@@ -851,7 +903,22 @@ export async function deliverOutboundPayloads(
         mirror: params.mirror,
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
-      }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
+      }).catch((err: unknown) => {
+        if (queuePolicy === "required") {
+          throw err;
+        }
+        return null;
+      }); // Best-effort delivery falls back to direct send if the queue write fails.
+
+  if (queueId) {
+    params.onDeliveryIntent?.({
+      id: queueId,
+      channel,
+      to,
+      ...(params.accountId ? { accountId: params.accountId } : {}),
+      queuePolicy,
+    });
+  }
 
   if (!queueId) {
     return await deliverOutboundPayloadsWithQueueCleanup(params, null);

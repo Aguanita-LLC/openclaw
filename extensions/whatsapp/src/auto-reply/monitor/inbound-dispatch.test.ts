@@ -247,7 +247,10 @@ describe("whatsapp inbound dispatch", () => {
     capturedDispatchParams = undefined;
     dispatchReplyWithBufferedBlockDispatcherMock.mockClear();
     deliverDurableInboundReplyPayloadMock.mockReset();
-    deliverDurableInboundReplyPayloadMock.mockResolvedValue(null);
+    deliverDurableInboundReplyPayloadMock.mockResolvedValue({
+      status: "unsupported",
+      reason: "missing_outbound_handler",
+    });
   });
 
   it("builds a finalized inbound context payload", () => {
@@ -530,8 +533,11 @@ describe("whatsapp inbound dispatch", () => {
 
   it("queues final WhatsApp payloads through durable outbound delivery", async () => {
     deliverDurableInboundReplyPayloadMock.mockResolvedValueOnce({
-      messageIds: ["wa-1"],
-      visibleReplySent: true,
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["wa-1"],
+        visibleReplySent: true,
+      },
     });
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
@@ -575,8 +581,12 @@ describe("whatsapp inbound dispatch", () => {
 
   it("does not fall back when durable WhatsApp delivery suppresses a send", async () => {
     deliverDurableInboundReplyPayloadMock.mockResolvedValueOnce({
-      messageIds: [],
-      visibleReplySent: false,
+      status: "handled_no_send",
+      reason: "no_visible_result",
+      delivery: {
+        messageIds: [],
+        visibleReplySent: false,
+      },
     });
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
@@ -602,8 +612,11 @@ describe("whatsapp inbound dispatch", () => {
 
   it("keeps media replies on the WhatsApp owner delivery path", async () => {
     deliverDurableInboundReplyPayloadMock.mockResolvedValueOnce({
-      messageIds: ["wa-1"],
-      visibleReplySent: true,
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["wa-1"],
+        visibleReplySent: true,
+      },
     });
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();

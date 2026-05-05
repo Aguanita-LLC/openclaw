@@ -11,9 +11,11 @@ import {
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
   deliverDurableInboundReplyPayload,
+  isDurableInboundReplyDeliveryHandled,
   resolveChannelTurnDispatchCounts,
   runChannelTurn,
   runPreparedChannelTurn,
+  throwIfDurableInboundReplyDeliveryFailed,
 } from "../channels/turn/kernel.js";
 import type { DurableInboundReplyDeliveryOptions } from "../channels/turn/kernel.js";
 import type { PreparedChannelTurn, RunChannelTurnParams } from "../channels/turn/types.js";
@@ -178,7 +180,8 @@ export async function recordInboundSessionAndDispatchReply(params: {
         info,
         ...params.durable,
       });
-      if (durable) {
+      throwIfDurableInboundReplyDeliveryFailed(durable);
+      if (isDurableInboundReplyDeliveryHandled(durable)) {
         return;
       }
     }

@@ -5,6 +5,10 @@ import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channe
 import {
   deliverOutboundPayloads,
   type DeliverOutboundPayloadsParams,
+  type DurableFinalDeliveryRequirement,
+  type DurableFinalDeliveryRequirements,
+  type OutboundDeliveryIntent,
+  resolveOutboundDurableFinalDeliverySupport,
 } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -16,6 +20,7 @@ export type DurableInboundReplyDeliveryOptions = Pick<
 > & {
   to?: string | null;
   replyToId?: string | null;
+  requiredCapabilities?: DurableFinalDeliveryRequirements;
 };
 
 export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptions & {
@@ -27,6 +32,21 @@ export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptio
   payload: ReplyPayload;
   info: ChannelDeliveryInfo;
 };
+
+export type DurableInboundReplyDeliveryResult =
+  | { status: "not_applicable"; reason: "non_final" }
+  | {
+      status: "unsupported";
+      reason:
+        | "missing_channel"
+        | "missing_target"
+        | "missing_outbound_handler"
+        | "capability_mismatch";
+      capability?: DurableFinalDeliveryRequirement;
+    }
+  | { status: "handled_visible"; delivery: ChannelDeliveryResult }
+  | { status: "handled_no_send"; reason: "no_visible_result"; delivery: ChannelDeliveryResult }
+  | { status: "failed"; error: unknown };
 
 function resolveDeliveryTarget(params: DurableInboundReplyDeliveryParams): string | undefined {
   return (
@@ -63,21 +83,69 @@ function isMissingOutboundHandlerError(err: unknown, channel: string): boolean {
   return err instanceof Error && err.message === `Outbound not configured for channel: ${channel}`;
 }
 
+function hasDurableRequirements(requirements?: DurableFinalDeliveryRequirements): boolean {
+  return Object.values(requirements ?? {}).some((required) => required === true);
+}
+
+function toDeliveryIntent(intent: OutboundDeliveryIntent): ChannelDeliveryResult["deliveryIntent"] {
+  return {
+    id: intent.id,
+    kind: "outbound_queue",
+    queuePolicy: intent.queuePolicy,
+  };
+}
+
+export function isDurableInboundReplyDeliveryHandled(
+  result: DurableInboundReplyDeliveryResult,
+): result is Extract<
+  DurableInboundReplyDeliveryResult,
+  { status: "handled_visible" | "handled_no_send" }
+> {
+  return result.status === "handled_visible" || result.status === "handled_no_send";
+}
+
+export function throwIfDurableInboundReplyDeliveryFailed(
+  result: DurableInboundReplyDeliveryResult,
+): void {
+  if (result.status === "failed") {
+    throw result.error;
+  }
+}
+
 export async function deliverDurableInboundReplyPayload(
   params: DurableInboundReplyDeliveryParams,
-): Promise<ChannelDeliveryResult | null> {
+): Promise<DurableInboundReplyDeliveryResult> {
   if (params.info.kind !== "final") {
-    return null;
+    return { status: "not_applicable", reason: "non_final" };
   }
 
   const channel = normalizeDeliverableOutboundChannel(params.channel);
   const to = resolveDeliveryTarget(params);
-  if (!channel || !to) {
-    return null;
+  if (!channel) {
+    return { status: "unsupported", reason: "missing_channel" };
+  }
+  if (!to) {
+    return { status: "unsupported", reason: "missing_target" };
+  }
+
+  if (hasDurableRequirements(params.requiredCapabilities)) {
+    const support = await resolveOutboundDurableFinalDeliverySupport({
+      cfg: params.cfg,
+      channel,
+      requirements: params.requiredCapabilities,
+    });
+    if (!support.ok) {
+      return {
+        status: "unsupported",
+        reason: support.reason,
+        ...(support.capability ? { capability: support.capability } : {}),
+      };
+    }
   }
 
   const replyToId = resolveReplyToId(params);
   const threadId = resolveThreadId(params);
+  let deliveryIntent: ChannelDeliveryResult["deliveryIntent"];
   const results = await deliverOutboundPayloads({
     cfg: params.cfg,
     channel,
@@ -105,22 +173,31 @@ export async function deliverDurableInboundReplyPayload(
       requesterSenderE164: params.ctxPayload.SenderE164,
     }),
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes,
+    queuePolicy: "required",
+    onDeliveryIntent: (intent) => {
+      deliveryIntent = toDeliveryIntent(intent);
+    },
   }).catch((err: unknown) => {
     if (isMissingOutboundHandlerError(err, channel)) {
-      return null;
+      return { status: "unsupported" as const, reason: "missing_outbound_handler" as const };
     }
-    throw err;
+    return { status: "failed" as const, error: err };
   });
 
-  if (!results) {
-    return null;
+  if (!Array.isArray(results)) {
+    return results;
   }
 
   const messageIds = collectMessageIds(results);
-  return {
+  const delivery: ChannelDeliveryResult = {
     ...(messageIds.length > 0 ? { messageIds } : {}),
     threadId: stringifyThreadId(threadId),
     ...(replyToId ? { replyToId } : {}),
     visibleReplySent: results.length > 0,
+    ...(deliveryIntent ? { deliveryIntent } : {}),
   };
+  if (results.length === 0) {
+    return { status: "handled_no_send", reason: "no_visible_result", delivery };
+  }
+  return { status: "handled_visible", delivery };
 }

@@ -9,7 +9,11 @@ import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.
 import type { FinalizedMsgContext, MsgContext } from "../../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { DeliverOutboundPayloadsParams } from "../../infra/outbound/deliver.js";
+import type {
+  DeliverOutboundPayloadsParams,
+  DurableFinalDeliveryRequirements,
+  OutboundDeliveryQueuePolicy,
+} from "../../infra/outbound/deliver.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 
 export type ChannelTurnAdmission =
@@ -169,11 +173,18 @@ export type ChannelDeliveryInfo = {
   kind: ReplyDispatchKind;
 };
 
+export type ChannelDeliveryIntent = {
+  id: string;
+  kind: "outbound_queue";
+  queuePolicy: OutboundDeliveryQueuePolicy;
+};
+
 export type ChannelDeliveryResult = {
   messageIds?: string[];
   threadId?: string;
   replyToId?: string;
   visibleReplySent?: boolean;
+  deliveryIntent?: ChannelDeliveryIntent;
 };
 
 export type ChannelTurnDeliveryAdapter = {
@@ -189,6 +200,7 @@ export type ChannelTurnDeliveryAdapter = {
       > & {
         to?: string | null;
         replyToId?: string | null;
+        requiredCapabilities?: DurableFinalDeliveryRequirements;
       });
   onError?: (err: unknown, info: { kind: string }) => void;
 };

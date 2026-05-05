@@ -222,7 +222,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       counts: { block: 0, final: 0, tool: 0 },
     });
     deliverReplies.mockResolvedValue({ delivered: true });
-    deliverDurableInboundReplyPayload.mockResolvedValue(null);
+    deliverDurableInboundReplyPayload.mockResolvedValue({
+      status: "unsupported",
+      reason: "missing_outbound_handler",
+    });
     emitInternalMessageSentHook.mockResolvedValue(undefined);
     createForumTopicTelegram.mockResolvedValue({ message_thread_id: 777 });
     deleteMessageTelegram.mockResolvedValue(true);
@@ -463,8 +466,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("queues final Telegram replies through outbound delivery when available", async () => {
     deliverDurableInboundReplyPayload.mockResolvedValue({
-      messageIds: ["1001"],
-      visibleReplySent: true,
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["1001"],
+        visibleReplySent: true,
+      },
     });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello queued" }, { kind: "final" });
@@ -510,8 +516,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("skips answer draft preview for same-chat selected quotes", async () => {
     deliverDurableInboundReplyPayload.mockResolvedValue({
-      messageIds: ["durable-quote-regression"],
-      visibleReplySent: true,
+      status: "unsupported",
+      reason: "capability_mismatch",
+      capability: "nativeQuote",
     });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
@@ -542,7 +549,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replyQuoteText: " quoted slice\n",
       }),
     );
-    expect(deliverDurableInboundReplyPayload).not.toHaveBeenCalled();
+    expect(deliverDurableInboundReplyPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requiredCapabilities: expect.objectContaining({
+          nativeQuote: true,
+        }),
+      }),
+    );
   });
 
   it("keeps answer draft preview for current message replies with native quote candidates", async () => {
@@ -1133,8 +1146,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("queues silent error replies through durable delivery with silent preserved", async () => {
     deliverDurableInboundReplyPayload.mockResolvedValue({
-      messageIds: ["durable-silent"],
-      visibleReplySent: true,
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["durable-silent"],
+        visibleReplySent: true,
+      },
     });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "oops", isError: true }, { kind: "final" });
@@ -4336,8 +4352,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     deliverReplies.mockResolvedValue({ delivered: true });
     deliverDurableInboundReplyPayload.mockResolvedValue({
-      messageIds: ["2002"],
-      visibleReplySent: true,
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["2002"],
+        visibleReplySent: true,
+      },
     });
     const preConnectErr = new Error("connect ECONNREFUSED 149.154.167.220:443");
     (preConnectErr as NodeJS.ErrnoException).code = "ECONNREFUSED";

@@ -438,7 +438,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             }),
           },
         });
-        if (durable) {
+        if (durable.status === "failed") {
+          throw durable.error;
+        }
+        if (durable.status === "handled_visible" || durable.status === "handled_no_send") {
           return;
         }
         await deliverReplies({
