@@ -84,7 +84,7 @@ function isMissingOutboundHandlerError(err: unknown, channel: string): boolean {
 }
 
 function hasDurableRequirements(requirements?: DurableFinalDeliveryRequirements): boolean {
-  return Object.values(requirements ?? {}).some((required) => required === true);
+  return Object.values(requirements ?? {}).some(Boolean);
 }
 
 function toDeliveryIntent(intent: OutboundDeliveryIntent): ChannelDeliveryResult["deliveryIntent"] {
