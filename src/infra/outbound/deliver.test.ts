@@ -308,7 +308,7 @@ describe("deliverOutboundPayloads", () => {
             id: "matrix",
             outbound: {
               deliveryMode: "direct",
-              sendText: async () => ({ messageId: "m1" }),
+              sendText: async () => ({ channel: "matrix", messageId: "m1" }),
               deliveryCapabilities: {
                 durableFinal: {
                   text: true,
