@@ -644,6 +644,51 @@ describe("extractAttachmentText", () => {
     expect(remaining).toHaveLength(0);
   });
 
+  it("extracts text resources even when mimeType is absent", async () => {
+    const result = await extractAttachmentText(
+      [
+        {
+          type: "resource",
+          resource: {
+            uri: "u-no-mime",
+            text: "plain extracted text",
+          },
+        },
+      ],
+      { stagingDir },
+    );
+
+    expect(result.text).toContain("[resource: u-no-mime]");
+    expect(result.text).toContain("plain extracted text");
+    expect(result.unsupported).toEqual([]);
+  });
+
+  it("degrades image extraction failures to unsupported placeholders", async () => {
+    const describeImage = vi.fn(async (_filePath: string) => {
+      throw new Error("decode failed");
+    });
+
+    const result = await extractAttachmentText(
+      [
+        {
+          type: "image",
+          mimeType: "image/png",
+          data: Buffer.from("fakeimagedata").toString("base64"),
+        },
+      ],
+      {
+        describeImage,
+        stagingDir,
+      },
+    );
+
+    expect(result.text).toContain("[unsupported attachment: image");
+    expect(result.unsupported).toEqual(["image"]);
+
+    const remaining = await fs.readdir(stagingDir);
+    expect(remaining).toHaveLength(0);
+  });
+
   it("redacts extracted attachment text", async () => {
     const secretToken = "sk-openai-1234567890ABCDEFGH";
 

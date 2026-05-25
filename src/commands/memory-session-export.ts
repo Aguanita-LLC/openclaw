@@ -203,13 +203,11 @@ export async function extractAttachmentText(
     }
 
     if (type === "resource") {
-      // Must have a resource object with mimeType starting with "text/" and a string text field
+      // Treat any resource with inline string text as text-bearing content, even if mimeType is absent.
       const resource = b["resource"];
       if (
         resource !== null &&
         typeof resource === "object" &&
-        typeof (resource as Record<string, unknown>)["mimeType"] === "string" &&
-        ((resource as Record<string, unknown>)["mimeType"] as string).startsWith("text/") &&
         typeof (resource as Record<string, unknown>)["text"] === "string"
       ) {
         const r = resource as Record<string, unknown>;
@@ -233,13 +231,15 @@ export async function extractAttachmentText(
       await fs.mkdir(stagingDir, { recursive: true });
       const tempFile = path.join(stagingDir, `${crypto.randomUUID()}.${ext}`);
       await fs.writeFile(tempFile, Buffer.from(data, "base64"));
-      let description: string;
       try {
-        description = await describeImage(tempFile);
+        const description = await describeImage(tempFile);
+        parts.push(`[image: ${redact(description)}]`);
+      } catch {
+        unsupported.push(type);
+        parts.push(`[unsupported attachment: ${type} — referenced, not extracted]`);
       } finally {
         await fs.unlink(tempFile).catch(() => {});
       }
-      parts.push(`[image: ${redact(description)}]`);
       continue;
     }
 
