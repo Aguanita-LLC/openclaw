@@ -579,6 +579,10 @@ export async function runMemorySessionExportCommand(
       skipped++;
       continue;
     }
+    if (entry.generatedByDreamingNarrative || entry.generatedByCronRun) {
+      skipped++;
+      continue;
+    }
 
     const prepared = await prepareSessionExport(file, entry, {
       attachmentDeps: { stagingDir },

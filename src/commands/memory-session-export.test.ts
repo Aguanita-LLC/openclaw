@@ -695,6 +695,67 @@ describe("runMemorySessionExportCommand", () => {
     await expect(fs.access(archivePath)).rejects.toThrow();
   });
 
+  it("skips generated attachment-only sessions before dry-run counting or attachment extraction work", async () => {
+    const uuid = "bbbbbbbb-cccc-dddd-eeee-000000000001";
+    const sessionPath = path.join(workspaceDir, `${uuid}.jsonl`);
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "image",
+              mimeType: "image/png",
+              data: Buffer.from("generated-attachment-bytes").toString("base64"),
+            },
+          ],
+        },
+      }),
+    );
+
+    const entry = makeEntry(uuid, {
+      absPath: sessionPath,
+      content: "",
+      generatedByCronRun: true,
+    });
+
+    vi.mocked(spawnSync).mockImplementation(() => {
+      throw new Error("attachment extraction should not run for generated sessions");
+    });
+
+    const writeSpy = vi.fn();
+    const summarizeSpy = vi.fn();
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const deps = {
+      listSessions: async () => [sessionPath],
+      buildEntry: async () => entry,
+      summarize: summarizeSpy,
+      writeFile: writeSpy,
+      workspaceDir,
+      agentId: "main",
+      runtime,
+    };
+
+    await expect(
+      runMemorySessionExportCommand({ dryRun: true, force: false, model: "test/model" }, deps),
+    ).resolves.toEqual({ exported: 0, skipped: 1, failed: 0 });
+
+    expect(spawnSync).not.toHaveBeenCalled();
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    expect(writeSpy).not.toHaveBeenCalled();
+
+    await expect(
+      runMemorySessionExportCommand({ dryRun: false, force: false, model: "test/model" }, deps),
+    ).resolves.toEqual({ exported: 0, skipped: 1, failed: 0 });
+
+    expect(spawnSync).not.toHaveBeenCalled();
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
   it("does not duplicate the index line on re-export", async () => {
     const uuid = "cccccccc-dddd-eeee-ffff-000000000000";
     const entry = makeEntry(uuid);
