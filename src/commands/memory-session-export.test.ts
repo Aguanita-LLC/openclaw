@@ -88,7 +88,15 @@ describe("exportOneSession", () => {
       error: undefined,
       status: 0,
       stdout: JSON.stringify({
-        completion: "SUMMARY",
+        ok: true,
+        capability: "model.run",
+        transport: "local",
+        outputs: [
+          {
+            text: "SUMMARY",
+            mediaUrl: null,
+          },
+        ],
       }),
       stderr: "",
     } as ReturnType<typeof spawnSync>);

@@ -82,11 +82,14 @@ async function summarize(text: string, model: string): Promise<string> {
         : `infer model run failed with status ${result.status ?? "unknown"}`,
     );
   }
-  const parsed = JSON.parse(result.stdout || "{}") as { completion?: unknown };
-  if (typeof parsed.completion !== "string") {
-    throw new Error("infer model run did not return a string completion");
+  const parsed = JSON.parse(result.stdout || "{}") as {
+    outputs?: Array<{ text?: unknown }>;
+  };
+  const outputText = parsed.outputs?.find((output) => typeof output.text === "string")?.text;
+  if (typeof outputText !== "string") {
+    throw new Error("infer model run did not return a string text output");
   }
-  return parsed.completion;
+  return outputText;
 }
 
 function sessionUuidFromEntry(entry: SessionFileEntry): string {
