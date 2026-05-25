@@ -600,7 +600,7 @@ async function readModelRunPromptFromStdin(): Promise<string> {
   }
   const text = chunks.join("");
   if (normalizeOptionalString(text) === undefined) {
-    throw new Error("--prompt cannot be empty or whitespace-only.");
+    throw new Error("--prompt-stdin received empty or whitespace-only input.");
   }
   return text;
 }

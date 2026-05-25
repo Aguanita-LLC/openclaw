@@ -744,6 +744,27 @@ describe("capability cli", () => {
     );
   });
 
+  it("errors when --prompt-stdin receives empty stdin", async () => {
+    const originalStdin = process.stdin;
+    const fakeStdin = Readable.from([""]) as NodeJS.ReadStream;
+    (fakeStdin as unknown as { isTTY: boolean }).isTTY = false;
+    Object.defineProperty(process, "stdin", { value: fakeStdin, configurable: true });
+    try {
+      await expect(
+        runRegisteredCli({
+          register: registerCapabilityCli as (program: Command) => void,
+          argv: ["capability", "model", "run", "--prompt-stdin", "--json"],
+        }),
+      ).rejects.toThrow("exit 1");
+    } finally {
+      Object.defineProperty(process, "stdin", { value: originalStdin, configurable: true });
+    }
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining("--prompt-stdin"));
+    expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+  });
+
   it("errors when both --prompt and --prompt-stdin are given", async () => {
     const originalStdin = process.stdin;
     const fakeStdin = Readable.from(["piped text"]) as NodeJS.ReadStream;
