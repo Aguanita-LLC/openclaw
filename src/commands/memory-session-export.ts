@@ -12,6 +12,14 @@ type SessionSummary = {
   summary: string;
 };
 
+export type MemorySessionExportState = Record<
+  string,
+  {
+    hash?: string;
+    mtimeMs: number;
+  }
+>;
+
 export type ExportOneSessionOptions = {
   buildEntry?: (p: string) => Promise<SessionFileEntry | null>;
   summarize?: (text: string, model: string) => Promise<string>;
@@ -20,6 +28,32 @@ export type ExportOneSessionOptions = {
 };
 
 const DEFAULT_SUMMARY_MODEL = "deepseek/deepseek-v4-flash";
+
+function sessionUuidFromEntry(entry: SessionFileEntry): string {
+  const match = entry.path.match(/([^/]+?)(?:\.jsonl(?:\..+)?)?$/);
+  return match?.[1] ?? entry.path;
+}
+
+export function shouldExport(
+  entry: SessionFileEntry,
+  state: MemorySessionExportState,
+  force: boolean,
+): boolean {
+  if (force) {
+    return true;
+  }
+
+  const previous = state[sessionUuidFromEntry(entry)];
+  if (!previous) {
+    return true;
+  }
+
+  if (previous.hash && entry.hash) {
+    return previous.hash !== entry.hash;
+  }
+
+  return previous.mtimeMs !== entry.mtimeMs;
+}
 
 export async function exportOneSession(
   sessionPath: string,

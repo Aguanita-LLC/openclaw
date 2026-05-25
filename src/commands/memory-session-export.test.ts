@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSessionEntry } from "../memory-host-sdk/engine-qmd.js";
-import { exportOneSession } from "./memory-session-export.js";
+import { buildSessionEntry, type SessionFileEntry } from "../memory-host-sdk/engine-qmd.js";
+import { exportOneSession, shouldExport } from "./memory-session-export.js";
 
 describe("exportOneSession", () => {
   let tempDir: string;
@@ -76,5 +76,48 @@ describe("exportOneSession", () => {
     await expect(exportOneSession(sessionPath)).rejects.toThrow(
       "exportOneSession requires a summarize dependency",
     );
+  });
+});
+
+describe("shouldExport", () => {
+  function makeEntry(overrides: Partial<SessionFileEntry> = {}): SessionFileEntry {
+    return {
+      path: "agent/sessions/123e4567-e89b-12d3-a456-426614174000.jsonl",
+      absPath: "/tmp/123e4567-e89b-12d3-a456-426614174000.jsonl",
+      mtimeMs: 100,
+      size: 1,
+      hash: "hash-a",
+      content: "User: hello",
+      lineMap: [1],
+      messageTimestampsMs: [0],
+      ...overrides,
+    };
+  }
+
+  it("skips unchanged sessions, re-exports changed hashes, and force bypasses state", () => {
+    const entry = makeEntry();
+    const state = {
+      "123e4567-e89b-12d3-a456-426614174000": {
+        hash: "hash-a",
+        mtimeMs: 100,
+      },
+    };
+
+    expect(shouldExport(entry, state, false)).toBe(false);
+    expect(shouldExport({ ...entry, hash: "hash-b" }, state, false)).toBe(true);
+    expect(shouldExport(entry, state, true)).toBe(true);
+  });
+
+  it("falls back to mtime when the stored hash is unavailable", () => {
+    const entry = makeEntry();
+    const state = {
+      "123e4567-e89b-12d3-a456-426614174000": {
+        hash: "",
+        mtimeMs: 100,
+      },
+    };
+
+    expect(shouldExport(entry, state, false)).toBe(false);
+    expect(shouldExport({ ...entry, mtimeMs: 101 }, state, false)).toBe(true);
   });
 });
