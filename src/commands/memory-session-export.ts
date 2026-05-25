@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildSessionEntry, type SessionFileEntry } from "../memory-host-sdk/engine-qmd.js";
@@ -32,6 +33,8 @@ export type ExportOneSessionOptions = {
 };
 
 const DEFAULT_SUMMARY_MODEL = "deepseek/deepseek-v4-flash";
+const RENAME_MAX_RETRIES = 3;
+const RENAME_BASE_DELAY_MS = 50;
 
 function resolveStagingDir(targetAbs: string): string {
   const parsed = path.parse(targetAbs);
@@ -59,7 +62,39 @@ export async function atomicWrite(targetAbs: string, body: string): Promise<void
     await handle.close();
   }
 
-  await fs.rename(tempPath, targetAbs);
+  await renameWithRetry(tempPath, targetAbs);
+}
+
+async function renameWithRetry(src: string, dest: string): Promise<void> {
+  for (let attempt = 0; attempt <= RENAME_MAX_RETRIES; attempt++) {
+    try {
+      await fs.rename(src, dest);
+      return;
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "EBUSY" && attempt < RENAME_MAX_RETRIES) {
+        await new Promise((resolve) => setTimeout(resolve, RENAME_BASE_DELAY_MS * 2 ** attempt));
+        continue;
+      }
+      if (code === "EPERM" || code === "EEXIST") {
+        await fs.copyFile(src, dest);
+        await fs.unlink(src).catch(() => {});
+        return;
+      }
+      throw err;
+    }
+  }
+}
+
+function resolveInferCliCwd(): string {
+  const repoCwd = process.cwd();
+  if (existsSync(path.join(repoCwd, "dist", "index.js"))) {
+    return repoCwd;
+  }
+  if (existsSync(path.join("/app", "dist", "index.js"))) {
+    return "/app";
+  }
+  return repoCwd;
 }
 
 async function summarize(text: string, model: string): Promise<string> {
@@ -67,7 +102,7 @@ async function summarize(text: string, model: string): Promise<string> {
     "node",
     ["dist/index.js", "infer", "model", "run", "--model", model, "--prompt", text, "--json"],
     {
-      cwd: "/app",
+      cwd: resolveInferCliCwd(),
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     },

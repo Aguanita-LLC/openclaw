@@ -118,7 +118,7 @@ describe("exportOneSession", () => {
         "--json",
       ],
       {
-        cwd: "/app",
+        cwd: process.cwd(),
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -154,8 +154,10 @@ describe("atomicWrite", () => {
 
     const [openedPath, openFlags] = openSpy.mock.calls[0] ?? [];
     const [renameFrom, renameTo] = renameSpy.mock.calls[0] ?? [];
+    const expectedStagingDir = path.join(tempDir, "raw", ".staging");
 
-    expect(openedPath).toEqual(expect.stringMatching(/raw\/\.staging\/[^/]+\.tmp$/));
+    expect(path.dirname(openedPath as string)).toBe(expectedStagingDir);
+    expect(path.basename(openedPath as string)).toMatch(/.+\.tmp$/);
     expect(openFlags).toBe("w");
     expect(renameFrom).toBe(openedPath);
     expect(renameTo).toBe(target);
@@ -165,6 +167,38 @@ describe("atomicWrite", () => {
 
     openSpy.mockRestore();
     renameSpy.mockRestore();
+  });
+
+  it("overwrites an existing target when rename reports a Windows replace error", async () => {
+    const target = path.join(tempDir, "raw", "session.md");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, "old body", "utf8");
+
+    const renameSpy = vi
+      .spyOn(fs, "rename")
+      .mockRejectedValueOnce(Object.assign(new Error("rename blocked"), { code: "EPERM" }));
+    const copyFileSpy = vi.spyOn(fs, "copyFile");
+    const unlinkSpy = vi.spyOn(fs, "unlink");
+
+    await atomicWrite(target, "new body");
+
+    expect(renameSpy).toHaveBeenCalledTimes(1);
+    expect(copyFileSpy).toHaveBeenCalledTimes(1);
+    expect(unlinkSpy).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("new body");
+
+    renameSpy.mockRestore();
+    copyFileSpy.mockRestore();
+    unlinkSpy.mockRestore();
+  });
+
+  it("can write the same target twice", async () => {
+    const target = path.join(tempDir, "raw", "session.md");
+
+    await atomicWrite(target, "first body");
+    await atomicWrite(target, "second body");
+
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("second body");
   });
 });
 
