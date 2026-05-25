@@ -60,7 +60,7 @@ describe("exportOneSession", () => {
     });
   });
 
-  it("does not synthesize an empty summary when summarize is missing", async () => {
+  it("throws a clear error when summarize is missing", async () => {
     const sessionPath = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
       sessionPath,
@@ -73,6 +73,8 @@ describe("exportOneSession", () => {
       }),
     );
 
-    await expect(exportOneSession(sessionPath)).rejects.toThrow(/summarize/i);
+    await expect(exportOneSession(sessionPath)).rejects.toThrow(
+      "exportOneSession requires a summarize dependency",
+    );
   });
 });

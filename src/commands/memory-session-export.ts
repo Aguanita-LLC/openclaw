@@ -32,7 +32,11 @@ export async function exportOneSession(
     return null;
   }
 
-  const summary = await options.summarize!(entry.content, options.model ?? DEFAULT_SUMMARY_MODEL);
+  if (!options.summarize) {
+    throw new Error("exportOneSession requires a summarize dependency");
+  }
+
+  const summary = await options.summarize(entry.content, options.model ?? DEFAULT_SUMMARY_MODEL);
   return {
     hash: entry.hash,
     mtimeMs: entry.mtimeMs,
