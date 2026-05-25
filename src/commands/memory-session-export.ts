@@ -28,7 +28,17 @@ type SessionSummary = {
   hash: string;
   mtimeMs: number;
   summary: string;
+  sources?: SessionSummarySource[];
 };
+
+type SessionSummarySource =
+  | {
+      kind: "image";
+    }
+  | {
+      kind: "resource";
+      uri?: string;
+    };
 
 export type MemorySessionExportState = Record<
   string,
@@ -43,6 +53,11 @@ export type ExportOneSessionOptions = {
   summarize?: (text: string, model: string) => Promise<string>;
   writer?: (relPath: string, body: string) => Promise<void>;
   model?: string;
+  extractAttachmentText?: (
+    blocks: unknown[],
+    deps?: ExtractAttachmentDeps,
+  ) => Promise<{ text: string; unsupported: string[] }>;
+  attachmentDeps?: ExtractAttachmentDeps;
 };
 
 const DEFAULT_SUMMARY_MODEL = "deepseek/deepseek-v4-flash";
@@ -282,6 +297,77 @@ async function summarize(text: string, model: string): Promise<string> {
   return outputText;
 }
 
+async function collectSessionAttachmentBlocks(sessionPath: string): Promise<{
+  blocks: unknown[];
+  sources: SessionSummarySource[];
+}> {
+  const blocks: unknown[] = [];
+  const sources: SessionSummarySource[] = [];
+  let raw: string;
+  try {
+    raw = await fs.readFile(sessionPath, "utf8");
+  } catch {
+    return { blocks, sources };
+  }
+
+  for (const line of raw.split("\n")) {
+    if (line.trim() === "") {
+      continue;
+    }
+
+    let record: unknown;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (
+      !record ||
+      typeof record !== "object" ||
+      (record as { type?: unknown }).type !== "message"
+    ) {
+      continue;
+    }
+
+    const message = (record as { message?: unknown }).message;
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+
+    const role = (message as { role?: unknown }).role;
+    const content = (message as { content?: unknown }).content;
+    if ((role !== "user" && role !== "assistant") || !Array.isArray(content)) {
+      continue;
+    }
+
+    for (const block of content) {
+      blocks.push(block);
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      const type = (block as { type?: unknown }).type;
+      if (type === "image") {
+        sources.push({ kind: "image" });
+        continue;
+      }
+      if (type === "resource") {
+        const resource = (block as { resource?: unknown }).resource;
+        sources.push({
+          kind: "resource",
+          ...(resource &&
+          typeof resource === "object" &&
+          typeof (resource as { uri?: unknown }).uri === "string"
+            ? { uri: (resource as { uri: string }).uri }
+            : {}),
+        });
+      }
+    }
+  }
+
+  return { blocks, sources };
+}
+
 function sessionUuidFromEntry(entry: SessionFileEntry): string {
   const match = entry.path.match(/([^/]+?)(?:\.jsonl(?:\..+)?)?$/);
   return match?.[1] ?? entry.path;
@@ -319,14 +405,27 @@ export async function exportOneSession(
     return null;
   }
 
+  const { blocks, sources } = await collectSessionAttachmentBlocks(sessionPath);
+  const attachmentText =
+    blocks.length > 0
+      ? (
+          await (options.extractAttachmentText ?? extractAttachmentText)(
+            blocks,
+            options.attachmentDeps,
+          )
+        ).text.trim()
+      : "";
+  const summaryInput =
+    attachmentText.length > 0 ? `${entry.content}\n${attachmentText}` : entry.content;
   const summary = await (options.summarize ?? summarize)(
-    entry.content,
+    summaryInput,
     options.model ?? DEFAULT_SUMMARY_MODEL,
   );
   return {
     hash: entry.hash,
     mtimeMs: entry.mtimeMs,
     summary,
+    ...(sources.length > 0 ? { sources } : {}),
   };
 }
 

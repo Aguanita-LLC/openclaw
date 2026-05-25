@@ -135,6 +135,80 @@ describe("exportOneSession", () => {
       summary: "SUMMARY",
     });
   });
+
+  it("folds extracted attachment text into the session document and records attachment sources", async () => {
+    const sessionPath = path.join(tempDir, "session-with-attachments.jsonl");
+    const imageBlock = {
+      type: "image",
+      mimeType: "image/png",
+      data: Buffer.from("fake-image-bytes").toString("base64"),
+    };
+    const resourceBlock = {
+      type: "resource",
+      resource: {
+        uri: "memory://note.md",
+        mimeType: "text/markdown",
+        text: "# Embedded note",
+      },
+    };
+
+    await fs.writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "See attachments" }, imageBlock, resourceBlock],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "I reviewed them",
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const entry = await buildSessionEntry(sessionPath);
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toBe("User: See attachments\nAssistant: I reviewed them");
+
+    const summarize = vi.fn(async () => "SUMMARY");
+    const extractAttachmentText = vi.fn(async () => ({
+      text: "[image: a terminal screenshot]\n[resource: memory://note.md]\n# Embedded note",
+      unsupported: [],
+    }));
+
+    const result = await exportOneSession(sessionPath, {
+      summarize,
+      extractAttachmentText,
+    });
+
+    expect(extractAttachmentText).toHaveBeenCalledTimes(1);
+    expect(extractAttachmentText).toHaveBeenCalledWith(
+      [{ type: "text", text: "See attachments" }, imageBlock, resourceBlock],
+      undefined,
+    );
+    expect(summarize).toHaveBeenCalledWith(
+      [
+        "User: See attachments",
+        "Assistant: I reviewed them",
+        "[image: a terminal screenshot]",
+        "[resource: memory://note.md]",
+        "# Embedded note",
+      ].join("\n"),
+      "deepseek/deepseek-v4-flash",
+    );
+    expect(result).toEqual({
+      hash: entry?.hash,
+      mtimeMs: entry?.mtimeMs,
+      summary: "SUMMARY",
+      sources: [{ kind: "image" }, { kind: "resource", uri: "memory://note.md" }],
+    });
+  });
 });
 
 describe("atomicWrite", () => {
