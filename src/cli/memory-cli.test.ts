@@ -18,4 +18,18 @@ describe("memory cli", () => {
       expect.objectContaining({ dryRun: true }),
     );
   });
+
+  it("registers memory through core subcli wiring", async () => {
+    const [{ registerSubCliByName }, { getSubCliEntries, getSubCliCommandsWithSubcommands }] =
+      await Promise.all([
+        import("./program/register.subclis-core.js"),
+        import("./program/subcli-descriptors.js"),
+      ]);
+    const program = new Command();
+
+    expect(getSubCliEntries().some((descriptor) => descriptor.name === "memory")).toBe(true);
+    expect(getSubCliCommandsWithSubcommands()).toContain("memory");
+    await expect(registerSubCliByName(program, "memory")).resolves.toBe(true);
+    expect(program.commands.some((command) => command.name() === "memory")).toBe(true);
+  });
 });

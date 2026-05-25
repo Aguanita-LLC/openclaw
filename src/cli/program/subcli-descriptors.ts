@@ -159,6 +159,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "memory",
+    description: "Memory maintenance commands",
+    hasSubcommands: true,
+  },
+  {
     name: "qdrant",
     description: "Qdrant maintenance and reconciliation",
     hasSubcommands: true,
