@@ -907,6 +907,94 @@ describe("runMemorySessionExportCommand", () => {
     >;
     expect(secondState[uuid]?.hash).not.toBe(firstStoredHash);
   });
+
+  it("reuses one prepared image attachment pass across change detection, summary, and persisted state", async () => {
+    const uuid = "eeeeeeee-ffff-0000-1111-222222222222";
+    const sessionPath = path.join(workspaceDir, `${uuid}.jsonl`);
+    const imageBlock = {
+      type: "image",
+      mimeType: "image/png",
+      data: Buffer.from("fake-image-bytes").toString("base64"),
+    };
+
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [imageBlock],
+        },
+      }),
+      "utf8",
+    );
+
+    const entry = await buildSessionEntry(sessionPath);
+    expect(entry).not.toBeNull();
+
+    vi.mocked(spawnSync)
+      .mockReturnValueOnce({
+        error: undefined,
+        status: 0,
+        stdout: JSON.stringify({
+          outputs: [{ text: "first nondeterministic image description" }],
+        }),
+        stderr: "",
+      } as ReturnType<typeof spawnSync>)
+      .mockReturnValueOnce({
+        error: undefined,
+        status: 0,
+        stdout: JSON.stringify({
+          outputs: [{ text: "second nondeterministic image description" }],
+        }),
+        stderr: "",
+      } as ReturnType<typeof spawnSync>);
+
+    const summarizeSpy = vi.fn(async (text: string) => `SUMMARY:${text}`);
+    const previousWorkspaceEnv = process.env["OPENCLAW_MEMORY_WORKSPACE_DIR"];
+    process.env["OPENCLAW_MEMORY_WORKSPACE_DIR"] = workspaceDir;
+
+    let result: Awaited<ReturnType<typeof runMemorySessionExportCommand>>;
+    try {
+      result = await runMemorySessionExportCommand(
+        { dryRun: false, force: false, model: "test/model" },
+        {
+          listSessions: async () => [sessionPath],
+          summarize: summarizeSpy,
+          writeFile: vi.fn(async () => {}),
+          workspaceDir,
+          agentId: "main",
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        },
+      );
+    } finally {
+      if (previousWorkspaceEnv === undefined) {
+        delete process.env["OPENCLAW_MEMORY_WORKSPACE_DIR"];
+      } else {
+        process.env["OPENCLAW_MEMORY_WORKSPACE_DIR"] = previousWorkspaceEnv;
+      }
+    }
+
+    expect(result).toEqual({ exported: 1, skipped: 0, failed: 0 });
+    expect(spawnSync).toHaveBeenCalledTimes(1);
+    expect(summarizeSpy).toHaveBeenCalledWith(
+      "[image: first nondeterministic image description]",
+      "test/model",
+    );
+
+    const statePath = path.join(workspaceDir, "archive", "sessions", "daily", ".export-state.json");
+    const stateContent = JSON.parse(await fs.readFile(statePath, "utf8")) as Record<
+      string,
+      { hash?: string; mtimeMs: number }
+    >;
+    expect(stateContent[uuid]).toEqual({
+      hash: attachmentAwareHash(
+        entry?.hash ?? "",
+        "[image: first nondeterministic image description]",
+      ),
+      mtimeMs: entry?.mtimeMs ?? 0,
+    });
+  });
 });
 
 describe("extractAttachmentText", () => {

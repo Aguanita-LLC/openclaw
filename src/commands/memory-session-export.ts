@@ -52,6 +52,7 @@ export type MemorySessionExportState = Record<
 
 export type ExportOneSessionOptions = {
   buildEntry?: (p: string) => Promise<SessionFileEntry | null>;
+  entry?: SessionFileEntry;
   summarize?: (text: string, model: string) => Promise<string>;
   writer?: (relPath: string, body: string) => Promise<void>;
   model?: string;
@@ -60,6 +61,7 @@ export type ExportOneSessionOptions = {
     deps?: ExtractAttachmentDeps,
   ) => Promise<{ text: string; unsupported: string[] }>;
   attachmentDeps?: ExtractAttachmentDeps;
+  prepared?: PreparedSessionExport;
 };
 
 type PreparedSessionExport = {
@@ -456,16 +458,18 @@ export async function exportOneSession(
   options: ExportOneSessionOptions = {},
 ): Promise<SessionSummary | null> {
   const buildEntry = options.buildEntry ?? buildSessionEntry;
-  const entry = await buildEntry(sessionPath);
+  const entry = options.entry ?? (await buildEntry(sessionPath));
 
   if (!entry || entry.generatedByDreamingNarrative || entry.generatedByCronRun) {
     return null;
   }
 
-  const { effectiveHash, summaryInput, sources } = await prepareSessionExport(sessionPath, entry, {
-    extractAttachmentText: options.extractAttachmentText,
-    attachmentDeps: options.attachmentDeps,
-  });
+  const { effectiveHash, summaryInput, sources } =
+    options.prepared ??
+    (await prepareSessionExport(sessionPath, entry, {
+      extractAttachmentText: options.extractAttachmentText,
+      attachmentDeps: options.attachmentDeps,
+    }));
   if (summaryInput.length === 0) {
     return null;
   }
@@ -576,7 +580,10 @@ export async function runMemorySessionExportCommand(
       continue;
     }
 
-    const { effectiveHash, summaryInput } = await prepareSessionExport(file, entry);
+    const prepared = await prepareSessionExport(file, entry, {
+      attachmentDeps: { stagingDir },
+    });
+    const { effectiveHash, summaryInput } = prepared;
     if (summaryInput.length === 0) {
       skipped++;
       continue;
@@ -601,8 +608,11 @@ export async function runMemorySessionExportCommand(
       // Redact content and summarize.
       const result = await exportOneSession(file, {
         buildEntry: buildEntryFn,
+        entry,
         summarize: summarizeFn,
         model: opts.model,
+        attachmentDeps: { stagingDir },
+        prepared,
       });
       if (!result) {
         skipped++;
