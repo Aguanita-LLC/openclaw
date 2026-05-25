@@ -1,15 +1,9 @@
-import { buildSessionEntry } from "../memory-host-sdk/engine-qmd.js";
+import { buildSessionEntry, type SessionFileEntry } from "../memory-host-sdk/engine-qmd.js";
 
 export type MemorySessionExportOptions = {
   dryRun: boolean;
   force: boolean;
   model: string;
-};
-
-type SessionEntry = {
-  content: string;
-  hash: string;
-  mtimeMs: number;
 };
 
 type SessionSummary = {
@@ -19,7 +13,7 @@ type SessionSummary = {
 };
 
 export type ExportOneSessionOptions = {
-  buildEntry?: (p: string) => Promise<SessionEntry | null>;
+  buildEntry?: (p: string) => Promise<SessionFileEntry | null>;
   summarize?: (text: string, model: string) => Promise<string>;
   writer?: (relPath: string, body: string) => Promise<void>;
   model?: string;
