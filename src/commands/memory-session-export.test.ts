@@ -52,11 +52,27 @@ describe("exportOneSession", () => {
     const result = await exportOneSession(sessionPath, { summarize });
 
     expect(summarize).toHaveBeenCalledTimes(1);
-    expect(summarize).toHaveBeenCalledWith(entry?.content, "gpt-5.5");
+    expect(summarize).toHaveBeenCalledWith(entry?.content, "deepseek/deepseek-v4-flash");
     expect(result).toEqual({
       hash: entry?.hash,
       mtimeMs: entry?.mtimeMs,
       summary: "SUMMARY",
     });
+  });
+
+  it("does not synthesize an empty summary when summarize is missing", async () => {
+    const sessionPath = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Sensitive token sk-openai-1234567890ABCDEFGH",
+        },
+      }),
+    );
+
+    await expect(exportOneSession(sessionPath)).rejects.toThrow(/summarize/i);
   });
 });

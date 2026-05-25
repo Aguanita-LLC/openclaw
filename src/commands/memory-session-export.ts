@@ -19,25 +19,20 @@ export type ExportOneSessionOptions = {
   model?: string;
 };
 
-const DEFAULT_SUMMARY_MODEL = "gpt-5.5";
-
-async function defaultSummarize(_text: string, _model: string): Promise<string> {
-  return "";
-}
+const DEFAULT_SUMMARY_MODEL = "deepseek/deepseek-v4-flash";
 
 export async function exportOneSession(
   sessionPath: string,
   options: ExportOneSessionOptions = {},
 ): Promise<SessionSummary | null> {
   const buildEntry = options.buildEntry ?? buildSessionEntry;
-  const summarize = options.summarize ?? defaultSummarize;
   const entry = await buildEntry(sessionPath);
 
   if (!entry || entry.content.trim().length === 0) {
     return null;
   }
 
-  const summary = await summarize(entry.content, options.model ?? DEFAULT_SUMMARY_MODEL);
+  const summary = await options.summarize!(entry.content, options.model ?? DEFAULT_SUMMARY_MODEL);
   return {
     hash: entry.hash,
     mtimeMs: entry.mtimeMs,
