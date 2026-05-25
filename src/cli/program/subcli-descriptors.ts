@@ -159,8 +159,8 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
-    name: "memory",
-    description: "Memory maintenance commands",
+    name: "memory-stack",
+    description: "Memory stack maintenance commands",
     hasSubcommands: true,
   },
   {
