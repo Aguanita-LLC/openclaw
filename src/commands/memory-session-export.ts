@@ -100,11 +100,12 @@ function resolveInferCliCwd(): string {
 async function summarize(text: string, model: string): Promise<string> {
   const result = spawnSync(
     "node",
-    ["dist/index.js", "infer", "model", "run", "--model", model, "--prompt", text, "--json"],
+    ["dist/index.js", "infer", "model", "run", "--model", model, "--prompt-stdin", "--json"],
     {
       cwd: resolveInferCliCwd(),
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
+      input: text,
+      stdio: ["pipe", "pipe", "pipe"],
     },
   );
   if (result.error) {

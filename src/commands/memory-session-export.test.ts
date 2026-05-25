@@ -113,14 +113,14 @@ describe("exportOneSession", () => {
         "run",
         "--model",
         "deepseek/deepseek-v4-flash",
-        "--prompt",
-        entry?.content,
+        "--prompt-stdin",
         "--json",
       ],
       {
         cwd: process.cwd(),
         encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
+        input: entry?.content,
+        stdio: ["pipe", "pipe", "pipe"],
       },
     );
     expect(result).toEqual({
