@@ -144,11 +144,27 @@ describe("atomicWrite", () => {
 
   it("writes through raw/.staging and leaves only the finished target", async () => {
     const target = path.join(tempDir, "raw", "session.md");
+    const openSpy = vi.spyOn(fs, "open");
+    const renameSpy = vi.spyOn(fs, "rename");
 
     await atomicWrite(target, "session body");
 
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(renameSpy).toHaveBeenCalledTimes(1);
+
+    const [openedPath, openFlags] = openSpy.mock.calls[0] ?? [];
+    const [renameFrom, renameTo] = renameSpy.mock.calls[0] ?? [];
+
+    expect(openedPath).toEqual(expect.stringMatching(/raw\/\.staging\/[^/]+\.tmp$/));
+    expect(openFlags).toBe("w");
+    expect(renameFrom).toBe(openedPath);
+    expect(renameTo).toBe(target);
+
     await expect(fs.readFile(target, "utf8")).resolves.toBe("session body");
     await expect(fs.readdir(path.join(tempDir, "raw", ".staging"))).resolves.toEqual([]);
+
+    openSpy.mockRestore();
+    renameSpy.mockRestore();
   });
 });
 
