@@ -74,6 +74,10 @@ const DEFAULT_SUMMARY_MODEL = "deepseek/deepseek-v4-flash";
 const RENAME_MAX_RETRIES = 3;
 const RENAME_BASE_DELAY_MS = 50;
 
+function redactForExport(text: string): string {
+  return redactSensitiveText(text, { mode: "tools" });
+}
+
 function resolveStagingDir(targetAbs: string): string {
   const parsed = path.parse(targetAbs);
   const segments = targetAbs.slice(parsed.root.length).split(path.sep).filter(Boolean);
@@ -198,7 +202,7 @@ export async function extractAttachmentText(
   blocks: unknown[],
   deps: ExtractAttachmentDeps = {},
 ): Promise<{ text: string; unsupported: string[] }> {
-  const redact = deps.redact ?? ((t: string) => redactSensitiveText(t, { mode: "tools" }));
+  const redact = deps.redact ?? redactForExport;
   const describeImage = deps.describeImage ?? defaultDescribeImage;
   const stagingDir =
     deps.stagingDir ??
@@ -237,7 +241,7 @@ export async function extractAttachmentText(
       ) {
         const r = resource as Record<string, unknown>;
         const uri = typeof r["uri"] === "string" ? r["uri"] : undefined;
-        const label = uri !== undefined ? `[resource: ${uri}]` : `[resource]`;
+        const label = uri !== undefined ? `[resource: ${redact(uri)}]` : `[resource]`;
         const rawText = r["text"] as string;
         parts.push(`${label}\n${redact(rawText)}`);
         continue;
@@ -381,7 +385,7 @@ async function collectSessionAttachmentBlocks(sessionPath: string): Promise<{
           ...(resource &&
           typeof resource === "object" &&
           typeof (resource as { uri?: unknown }).uri === "string"
-            ? { uri: (resource as { uri: string }).uri }
+            ? { uri: redactForExport((resource as { uri: string }).uri) }
             : {}),
         });
       }
@@ -396,17 +400,68 @@ function sessionUuidFromEntry(entry: SessionFileEntry): string {
   return match?.[1] ?? entry.path;
 }
 
-function computeEffectiveSessionHash(entryHash: string, attachmentText: string): string {
-  const trimmedAttachmentText = attachmentText.trim();
-  if (trimmedAttachmentText === "") {
+function computeEffectiveSessionHash(entryHash: string, attachmentFingerprint: string): string {
+  if (attachmentFingerprint === "[]") {
     return entryHash;
   }
   return crypto
     .createHash("sha256")
     .update(entryHash)
     .update("\n")
-    .update(trimmedAttachmentText)
+    .update(attachmentFingerprint)
     .digest("hex");
+}
+
+function buildAttachmentFingerprint(blocks: unknown[]): string {
+  const normalizedBlocks = blocks.flatMap((block) => {
+    if (!block || typeof block !== "object") {
+      return [];
+    }
+
+    const typedBlock = block as Record<string, unknown>;
+    if (typedBlock["type"] === "text") {
+      return [];
+    }
+
+    if (typedBlock["type"] === "image") {
+      return [
+        {
+          type: "image",
+          mimeType:
+            typeof typedBlock["mimeType"] === "string"
+              ? typedBlock["mimeType"]
+              : "application/octet-stream",
+          dataSha256: crypto
+            .createHash("sha256")
+            .update(typeof typedBlock["data"] === "string" ? typedBlock["data"] : "")
+            .digest("hex"),
+        },
+      ];
+    }
+
+    if (typedBlock["type"] === "resource") {
+      const resource =
+        typedBlock["resource"] !== null && typeof typedBlock["resource"] === "object"
+          ? (typedBlock["resource"] as Record<string, unknown>)
+          : null;
+      return [
+        {
+          type: "resource",
+          ...(typeof resource?.["uri"] === "string"
+            ? { uri: redactForExport(resource["uri"]) }
+            : {}),
+          ...(typeof resource?.["mimeType"] === "string" ? { mimeType: resource["mimeType"] } : {}),
+          ...(typeof resource?.["text"] === "string"
+            ? { text: redactForExport(resource["text"]) }
+            : {}),
+        },
+      ];
+    }
+
+    return [{ type: typedBlock["type"] }];
+  });
+
+  return JSON.stringify(normalizedBlocks);
 }
 
 async function prepareSessionExport(
@@ -415,6 +470,7 @@ async function prepareSessionExport(
   options: Pick<ExportOneSessionOptions, "extractAttachmentText" | "attachmentDeps"> = {},
 ): Promise<PreparedSessionExport> {
   const { blocks, sources } = await collectSessionAttachmentBlocks(sessionPath);
+  const attachmentFingerprint = buildAttachmentFingerprint(blocks);
   const attachmentText =
     blocks.length > 0
       ? (
@@ -426,7 +482,7 @@ async function prepareSessionExport(
       : "";
   const summaryInput = [entry.content.trim(), attachmentText].filter(Boolean).join("\n");
   return {
-    effectiveHash: computeEffectiveSessionHash(entry.hash, attachmentText),
+    effectiveHash: computeEffectiveSessionHash(entry.hash, attachmentFingerprint),
     summaryInput,
     sources,
   };

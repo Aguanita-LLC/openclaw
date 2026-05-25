@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { redactSensitiveText } from "../logging/redact.js";
 import { buildSessionEntry, type SessionFileEntry } from "../memory-host-sdk/engine-qmd.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -22,12 +23,66 @@ import {
   shouldExport,
 } from "./memory-session-export.js";
 
-function attachmentAwareHash(entryHash: string, attachmentText: string): string {
+function redactForExport(text: string): string {
+  return redactSensitiveText(text, { mode: "tools" });
+}
+
+function attachmentAwareHash(entryHash: string, blocks: unknown[]): string {
+  const fingerprint = JSON.stringify(
+    blocks.flatMap((block) => {
+      if (!block || typeof block !== "object") {
+        return [];
+      }
+      const typedBlock = block as Record<string, unknown>;
+      if (typedBlock["type"] === "text") {
+        return [];
+      }
+      if (typedBlock["type"] === "image") {
+        return [
+          {
+            type: "image",
+            mimeType:
+              typeof typedBlock["mimeType"] === "string"
+                ? typedBlock["mimeType"]
+                : "application/octet-stream",
+            dataSha256: crypto
+              .createHash("sha256")
+              .update(typeof typedBlock["data"] === "string" ? typedBlock["data"] : "")
+              .digest("hex"),
+          },
+        ];
+      }
+      if (typedBlock["type"] === "resource") {
+        const resource =
+          typedBlock["resource"] !== null && typeof typedBlock["resource"] === "object"
+            ? (typedBlock["resource"] as Record<string, unknown>)
+            : null;
+        return [
+          {
+            type: "resource",
+            ...(typeof resource?.["uri"] === "string"
+              ? { uri: redactForExport(resource["uri"]) }
+              : {}),
+            ...(typeof resource?.["mimeType"] === "string"
+              ? { mimeType: resource["mimeType"] }
+              : {}),
+            ...(typeof resource?.["text"] === "string"
+              ? { text: redactForExport(resource["text"]) }
+              : {}),
+          },
+        ];
+      }
+      return [{ type: typedBlock["type"] }];
+    }),
+  );
+  if (fingerprint === "[]") {
+    return entryHash;
+  }
   return crypto
     .createHash("sha256")
     .update(entryHash)
     .update("\n")
-    .update(attachmentText.trim())
+    .update(fingerprint)
     .digest("hex");
 }
 
@@ -213,10 +268,7 @@ describe("exportOneSession", () => {
       "deepseek/deepseek-v4-flash",
     );
     expect(result).toEqual({
-      hash: attachmentAwareHash(
-        entry?.hash ?? "",
-        "[image: a terminal screenshot]\n[resource: memory://note.md]\n# Embedded note",
-      ),
+      hash: attachmentAwareHash(entry?.hash ?? "", [imageBlock, resourceBlock]),
       mtimeMs: entry?.mtimeMs,
       summary: "SUMMARY",
       sources: [{ kind: "image" }, { kind: "resource", uri: "memory://note.md" }],
@@ -275,10 +327,7 @@ describe("exportOneSession", () => {
       "deepseek/deepseek-v4-flash",
     );
     expect(result).toEqual({
-      hash: attachmentAwareHash(
-        entry?.hash ?? "",
-        "[image: extracted screenshot]\n[resource: memory://attachment-only.md]\n# Attachment-only note",
-      ),
+      hash: attachmentAwareHash(entry?.hash ?? "", [imageBlock, resourceBlock]),
       mtimeMs: entry?.mtimeMs,
       summary: "ATTACHMENT SUMMARY",
       sources: [{ kind: "image" }, { kind: "resource", uri: "memory://attachment-only.md" }],
@@ -364,11 +413,66 @@ describe("exportOneSession", () => {
       "deepseek/deepseek-v4-flash",
     );
     expect(result).toEqual({
-      hash: attachmentAwareHash(entry?.hash ?? "", "[image: kept screenshot]"),
+      hash: attachmentAwareHash(entry?.hash ?? "", [keptImageBlock]),
       mtimeMs: entry?.mtimeMs,
       summary: "FILTERED SUMMARY",
       sources: [{ kind: "image" }],
     });
+  });
+
+  it("redacts secret-looking resource uris in attachment text and returned sources", async () => {
+    const sessionPath = path.join(tempDir, "resource-uri-redaction-session.jsonl");
+    const resourceUri =
+      "memory://notes/private.md?token=sk-openai-1234567890ABCDEFGH&signature=shhh-secret-value";
+    const expectedRedactedUri = redactForExport(resourceUri);
+
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "resource",
+              resource: {
+                uri: resourceUri,
+                mimeType: "text/markdown",
+                text: "# Private note",
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    const entry = await buildSessionEntry(sessionPath);
+    expect(entry).not.toBeNull();
+
+    const summarize = vi.fn(async () => "SUMMARY");
+    const result = await exportOneSession(sessionPath, { summarize });
+
+    expect(summarize).toHaveBeenCalledWith(
+      [`[resource: ${expectedRedactedUri}]`, "# Private note"].join("\n"),
+      "deepseek/deepseek-v4-flash",
+    );
+    expect(result).toEqual({
+      hash: attachmentAwareHash(entry?.hash ?? "", [
+        {
+          type: "resource",
+          resource: {
+            uri: resourceUri,
+            mimeType: "text/markdown",
+            text: "# Private note",
+          },
+        },
+      ]),
+      mtimeMs: expect.any(Number),
+      summary: "SUMMARY",
+      sources: [{ kind: "resource", uri: expectedRedactedUri }],
+    });
+    expect(JSON.stringify(result)).not.toContain("sk-openai-1234567890ABCDEFGH");
+    expect(JSON.stringify(result)).not.toContain("shhh-secret-value");
   });
 });
 
@@ -1049,11 +1153,93 @@ describe("runMemorySessionExportCommand", () => {
       { hash?: string; mtimeMs: number }
     >;
     expect(stateContent[uuid]).toEqual({
-      hash: attachmentAwareHash(
-        entry?.hash ?? "",
-        "[image: first nondeterministic image description]",
-      ),
+      hash: attachmentAwareHash(entry?.hash ?? "", [imageBlock]),
       mtimeMs: entry?.mtimeMs ?? 0,
+    });
+  });
+
+  it("does not re-export an unchanged image session when image description text changes between runs", async () => {
+    const uuid = "ffffffff-0000-1111-2222-333333333333";
+    const sessionPath = path.join(workspaceDir, `${uuid}.jsonl`);
+    const imageBlock = {
+      type: "image",
+      mimeType: "image/png",
+      data: Buffer.from("stable-image-bytes").toString("base64"),
+    };
+
+    vi.mocked(spawnSync).mockReset();
+
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [imageBlock],
+        },
+      }),
+      "utf8",
+    );
+
+    vi.mocked(spawnSync)
+      .mockReturnValueOnce({
+        error: undefined,
+        status: 0,
+        stdout: JSON.stringify({
+          outputs: [{ text: "first image description wording" }],
+        }),
+        stderr: "",
+      } as ReturnType<typeof spawnSync>)
+      .mockReturnValueOnce({
+        error: undefined,
+        status: 0,
+        stdout: JSON.stringify({
+          outputs: [{ text: "second image description wording" }],
+        }),
+        stderr: "",
+      } as ReturnType<typeof spawnSync>);
+
+    const summarizeSpy = vi.fn(async (text: string) => `SUMMARY:${text}`);
+    const writeSpy = vi.fn(async () => {});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    const firstResult = await runMemorySessionExportCommand(
+      { dryRun: false, force: false, model: "test/model" },
+      {
+        listSessions: async () => [sessionPath],
+        summarize: summarizeSpy,
+        writeFile: writeSpy,
+        workspaceDir,
+        agentId: "main",
+        runtime,
+      },
+    );
+
+    const secondResult = await runMemorySessionExportCommand(
+      { dryRun: false, force: false, model: "test/model" },
+      {
+        listSessions: async () => [sessionPath],
+        summarize: summarizeSpy,
+        writeFile: writeSpy,
+        workspaceDir,
+        agentId: "main",
+        runtime,
+      },
+    );
+
+    expect(firstResult).toEqual({ exported: 1, skipped: 0, failed: 0 });
+    expect(secondResult).toEqual({ exported: 0, skipped: 1, failed: 0 });
+    expect(spawnSync).toHaveBeenCalledTimes(2);
+    expect(summarizeSpy).toHaveBeenCalledTimes(1);
+
+    const statePath = path.join(workspaceDir, "archive", "sessions", "daily", ".export-state.json");
+    const stateContent = JSON.parse(await fs.readFile(statePath, "utf8")) as Record<
+      string,
+      { hash?: string; mtimeMs: number }
+    >;
+    expect(stateContent[uuid]).toEqual({
+      hash: attachmentAwareHash((await buildSessionEntry(sessionPath))?.hash ?? "", [imageBlock]),
+      mtimeMs: expect.any(Number),
     });
   });
 });
@@ -1138,6 +1324,28 @@ describe("extractAttachmentText", () => {
 
     expect(result.text).toContain("[resource: u-no-mime]");
     expect(result.text).toContain("plain extracted text");
+    expect(result.unsupported).toEqual([]);
+  });
+
+  it("redacts secret-looking resource uris in extracted text", async () => {
+    const uri =
+      "memory://notes/private.md?token=sk-openai-1234567890ABCDEFGH&signature=shhh-secret-value";
+    const result = await extractAttachmentText(
+      [
+        {
+          type: "resource",
+          resource: {
+            uri,
+            text: "plain extracted text",
+          },
+        },
+      ],
+      { stagingDir },
+    );
+
+    expect(result.text).toContain(`[resource: ${redactForExport(uri)}]`);
+    expect(result.text).not.toContain("sk-openai-1234567890ABCDEFGH");
+    expect(result.text).not.toContain("shhh-secret-value");
     expect(result.unsupported).toEqual([]);
   });
 
