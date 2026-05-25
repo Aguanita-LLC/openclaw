@@ -1229,7 +1229,9 @@ describe("runMemorySessionExportCommand", () => {
 
     expect(firstResult).toEqual({ exported: 1, skipped: 0, failed: 0 });
     expect(secondResult).toEqual({ exported: 0, skipped: 1, failed: 0 });
-    expect(spawnSync).toHaveBeenCalledTimes(2);
+    // The first run describes the image once; the second run skips before any
+    // extraction, so vision describe must NOT run again on the unchanged session.
+    expect(spawnSync).toHaveBeenCalledTimes(1);
     expect(summarizeSpy).toHaveBeenCalledTimes(1);
 
     const statePath = path.join(workspaceDir, "archive", "sessions", "daily", ".export-state.json");
@@ -1241,6 +1243,54 @@ describe("runMemorySessionExportCommand", () => {
       hash: attachmentAwareHash((await buildSessionEntry(sessionPath))?.hash ?? "", [imageBlock]),
       mtimeMs: expect.any(Number),
     });
+  });
+
+  it("dry-run does not run vision describe for an image-bearing session", async () => {
+    const uuid = "abcdef01-2345-6789-abcd-ef0123456789";
+    const sessionPath = path.join(workspaceDir, `${uuid}.jsonl`);
+    const imageBlock = {
+      type: "image",
+      mimeType: "image/png",
+      data: Buffer.from("dry-run-image-bytes").toString("base64"),
+    };
+
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [imageBlock],
+        },
+      }),
+      "utf8",
+    );
+
+    // If extraction runs during dry-run, the default describeImage would spawn this.
+    vi.mocked(spawnSync).mockReset();
+    vi.mocked(spawnSync).mockImplementation(() => {
+      throw new Error("vision describe must not run during dry-run");
+    });
+
+    const writeSpy = vi.fn();
+    const summarizeSpy = vi.fn();
+
+    const result = await runMemorySessionExportCommand(
+      { dryRun: true, force: false, model: "test/model" },
+      {
+        listSessions: async () => [sessionPath],
+        summarize: summarizeSpy,
+        writeFile: writeSpy,
+        workspaceDir,
+        agentId: "main",
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      },
+    );
+
+    expect(result).toEqual({ exported: 1, skipped: 0, failed: 0 });
+    expect(spawnSync).not.toHaveBeenCalled();
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    expect(writeSpy).not.toHaveBeenCalled();
   });
 });
 

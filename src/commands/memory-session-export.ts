@@ -61,13 +61,14 @@ export type ExportOneSessionOptions = {
     deps?: ExtractAttachmentDeps,
   ) => Promise<{ text: string; unsupported: string[] }>;
   attachmentDeps?: ExtractAttachmentDeps;
-  prepared?: PreparedSessionExport;
+  analysis?: SessionExportAnalysis;
 };
 
-type PreparedSessionExport = {
+type SessionExportAnalysis = {
+  blocks: unknown[];
   effectiveHash: string;
-  summaryInput: string;
   sources: SessionSummarySource[];
+  hasContent: boolean;
 };
 
 const DEFAULT_SUMMARY_MODEL = "deepseek/deepseek-v4-flash";
@@ -464,27 +465,33 @@ function buildAttachmentFingerprint(blocks: unknown[]): string {
   return JSON.stringify(normalizedBlocks);
 }
 
-async function prepareSessionExport(
+function blocksHaveNonText(blocks: unknown[]): boolean {
+  return blocks.some(
+    (block) =>
+      block !== null &&
+      typeof block === "object" &&
+      typeof (block as { type?: unknown }).type === "string" &&
+      (block as { type?: unknown }).type !== "text",
+  );
+}
+
+/**
+ * Cheap pre-export analysis: collect attachment blocks and compute the
+ * change-detection hash + provenance WITHOUT running any extraction (no vision
+ * describe / transcription). The export loop uses this to apply the
+ * incremental-skip and dry-run gates before paying for expensive extraction.
+ */
+async function analyzeSessionForExport(
   sessionPath: string,
   entry: SessionFileEntry,
-  options: Pick<ExportOneSessionOptions, "extractAttachmentText" | "attachmentDeps"> = {},
-): Promise<PreparedSessionExport> {
+): Promise<SessionExportAnalysis> {
   const { blocks, sources } = await collectSessionAttachmentBlocks(sessionPath);
   const attachmentFingerprint = buildAttachmentFingerprint(blocks);
-  const attachmentText =
-    blocks.length > 0
-      ? (
-          await (options.extractAttachmentText ?? extractAttachmentText)(
-            blocks,
-            options.attachmentDeps,
-          )
-        ).text.trim()
-      : "";
-  const summaryInput = [entry.content.trim(), attachmentText].filter(Boolean).join("\n");
   return {
+    blocks,
     effectiveHash: computeEffectiveSessionHash(entry.hash, attachmentFingerprint),
-    summaryInput,
     sources,
+    hasContent: entry.content.trim() !== "" || blocksHaveNonText(blocks),
   };
 }
 
@@ -520,24 +527,34 @@ export async function exportOneSession(
     return null;
   }
 
-  const { effectiveHash, summaryInput, sources } =
-    options.prepared ??
-    (await prepareSessionExport(sessionPath, entry, {
-      extractAttachmentText: options.extractAttachmentText,
-      attachmentDeps: options.attachmentDeps,
-    }));
+  const analysis = options.analysis ?? (await analyzeSessionForExport(sessionPath, entry));
+  if (!analysis.hasContent) {
+    return null;
+  }
+
+  const attachmentText =
+    analysis.blocks.length > 0
+      ? (
+          await (options.extractAttachmentText ?? extractAttachmentText)(
+            analysis.blocks,
+            options.attachmentDeps,
+          )
+        ).text.trim()
+      : "";
+  const summaryInput = [entry.content.trim(), attachmentText].filter(Boolean).join("\n");
   if (summaryInput.length === 0) {
     return null;
   }
+
   const summary = await (options.summarize ?? summarize)(
     summaryInput,
     options.model ?? DEFAULT_SUMMARY_MODEL,
   );
   return {
-    hash: effectiveHash,
+    hash: analysis.effectiveHash,
     mtimeMs: entry.mtimeMs,
     summary,
-    ...(sources.length > 0 ? { sources } : {}),
+    ...(analysis.sources.length > 0 ? { sources: analysis.sources } : {}),
   };
 }
 
@@ -640,16 +657,15 @@ export async function runMemorySessionExportCommand(
       continue;
     }
 
-    const prepared = await prepareSessionExport(file, entry, {
-      attachmentDeps: { stagingDir },
-    });
-    const { effectiveHash, summaryInput } = prepared;
-    if (summaryInput.length === 0) {
+    // Cheap analysis: change-detection hash + provenance with NO attachment
+    // extraction, so the skip/dry-run gates run before any expensive vision work.
+    const analysis = await analyzeSessionForExport(file, entry);
+    if (!analysis.hasContent) {
       skipped++;
       continue;
     }
 
-    if (!shouldExport({ ...entry, hash: effectiveHash }, state, opts.force)) {
+    if (!shouldExport({ ...entry, hash: analysis.effectiveHash }, state, opts.force)) {
       skipped++;
       continue;
     }
@@ -665,14 +681,15 @@ export async function runMemorySessionExportCommand(
     }
 
     try {
-      // Redact content and summarize.
+      // Extraction (vision describe, etc.) happens exactly once here, only for
+      // sessions that actually need exporting. Redact-before-summarize preserved.
       const result = await exportOneSession(file, {
         buildEntry: buildEntryFn,
         entry,
         summarize: summarizeFn,
         model: opts.model,
         attachmentDeps: { stagingDir },
-        prepared,
+        analysis,
       });
       if (!result) {
         skipped++;
