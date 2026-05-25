@@ -243,6 +243,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerSkillsCli",
     },
     {
+      commandNames: ["memory"],
+      loadModule: () => import("../memory-cli.js"),
+      exportName: "registerMemoryCli",
+    },
+    {
       commandNames: ["qdrant"],
       loadModule: () => import("../qdrant-cli.js"),
       exportName: "registerQdrantCli",
