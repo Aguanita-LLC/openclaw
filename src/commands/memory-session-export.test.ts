@@ -1,9 +1,19 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionEntry, type SessionFileEntry } from "../memory-host-sdk/engine-qmd.js";
-import { exportOneSession, shouldExport } from "./memory-session-export.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawnSync: vi.fn(),
+  };
+});
+
+import { atomicWrite, exportOneSession, shouldExport } from "./memory-session-export.js";
 
 describe("exportOneSession", () => {
   let tempDir: string;
@@ -14,6 +24,7 @@ describe("exportOneSession", () => {
 
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
+    vi.mocked(spawnSync).mockReset();
   });
 
   it("passes exactly the redacted default session entry content to the summarizer", async () => {
@@ -60,7 +71,7 @@ describe("exportOneSession", () => {
     });
   });
 
-  it("throws a clear error when summarize is missing", async () => {
+  it("uses the default summarizer when summarize is not provided", async () => {
     const sessionPath = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
       sessionPath,
@@ -73,9 +84,63 @@ describe("exportOneSession", () => {
       }),
     );
 
-    await expect(exportOneSession(sessionPath)).rejects.toThrow(
-      "exportOneSession requires a summarize dependency",
+    vi.mocked(spawnSync).mockReturnValue({
+      error: undefined,
+      status: 0,
+      stdout: JSON.stringify({
+        completion: "SUMMARY",
+      }),
+      stderr: "",
+    } as ReturnType<typeof spawnSync>);
+
+    const entry = await buildSessionEntry(sessionPath);
+    const result = await exportOneSession(sessionPath);
+
+    expect(spawnSync).toHaveBeenCalledWith(
+      "node",
+      [
+        "dist/index.js",
+        "infer",
+        "model",
+        "run",
+        "--model",
+        "deepseek/deepseek-v4-flash",
+        "--prompt",
+        entry?.content,
+        "--json",
+      ],
+      {
+        cwd: "/app",
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
     );
+    expect(result).toEqual({
+      hash: entry?.hash,
+      mtimeMs: entry?.mtimeMs,
+      summary: "SUMMARY",
+    });
+  });
+});
+
+describe("atomicWrite", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-session-export-write-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("writes through raw/.staging and leaves only the finished target", async () => {
+    const target = path.join(tempDir, "raw", "session.md");
+
+    await atomicWrite(target, "session body");
+
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("session body");
+    await expect(fs.readdir(path.join(tempDir, "raw", ".staging"))).resolves.toEqual([]);
   });
 });
 
