@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
@@ -111,6 +112,143 @@ function resolveInferCliCwd(): string {
     return "/app";
   }
   return repoCwd;
+}
+
+export type ExtractAttachmentDeps = {
+  describeImage?: (filePath: string) => Promise<string>;
+  stagingDir?: string;
+  redact?: (text: string) => string;
+};
+
+/** Map a mimeType like "image/png" to a short file extension. */
+function imageExtFromMimeType(mimeType: string): string {
+  if (mimeType === "image/png") return "png";
+  if (mimeType === "image/jpeg" || mimeType === "image/jpg") return "jpg";
+  if (mimeType === "image/gif") return "gif";
+  if (mimeType === "image/webp") return "webp";
+  return "bin";
+}
+
+async function defaultDescribeImage(filePath: string): Promise<string> {
+  const result = spawnSync(
+    "node",
+    [
+      "dist/index.js",
+      "infer",
+      "image",
+      "describe",
+      "--file",
+      filePath,
+      "--model",
+      "openai-codex/gpt-5.4-mini",
+      "--json",
+    ],
+    {
+      cwd: resolveInferCliCwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      typeof result.stderr === "string" && result.stderr.trim() !== ""
+        ? result.stderr.trim()
+        : `infer image describe failed with status ${result.status ?? "unknown"}`,
+    );
+  }
+  const parsed = JSON.parse(result.stdout || "{}") as {
+    outputs?: Array<{ text?: unknown }>;
+  };
+  const outputText = parsed.outputs?.find((output) => typeof output.text === "string")?.text;
+  if (typeof outputText !== "string") {
+    throw new Error("infer image describe did not return a string text output");
+  }
+  return outputText;
+}
+
+export async function extractAttachmentText(
+  blocks: unknown[],
+  deps: ExtractAttachmentDeps = {},
+): Promise<{ text: string; unsupported: string[] }> {
+  const redact = deps.redact ?? ((t: string) => redactSensitiveText(t, { mode: "tools" }));
+  const describeImage = deps.describeImage ?? defaultDescribeImage;
+  const stagingDir =
+    deps.stagingDir ??
+    path.join(
+      resolveWorkspaceDir(undefined, process.env[MEMORY_WORKSPACE_DIR_ENV], existsSync),
+      "raw",
+      ".staging",
+    );
+
+  const parts: string[] = [];
+  const unsupported: string[] = [];
+
+  for (const block of blocks) {
+    // Skip non-objects and entries without a string type field
+    if (block === null || typeof block !== "object") {
+      continue;
+    }
+    const b = block as Record<string, unknown>;
+    if (typeof b["type"] !== "string") {
+      continue;
+    }
+    const type = b["type"];
+
+    if (type === "text") {
+      // Already handled by buildSessionEntry — skip
+      continue;
+    }
+
+    if (type === "resource") {
+      // Must have a resource object with mimeType starting with "text/" and a string text field
+      const resource = b["resource"];
+      if (
+        resource !== null &&
+        typeof resource === "object" &&
+        typeof (resource as Record<string, unknown>)["mimeType"] === "string" &&
+        ((resource as Record<string, unknown>)["mimeType"] as string).startsWith("text/") &&
+        typeof (resource as Record<string, unknown>)["text"] === "string"
+      ) {
+        const r = resource as Record<string, unknown>;
+        const uri = typeof r["uri"] === "string" ? r["uri"] : undefined;
+        const label = uri !== undefined ? `[resource: ${uri}]` : `[resource]`;
+        const rawText = r["text"] as string;
+        parts.push(`${label}\n${redact(rawText)}`);
+        continue;
+      }
+      // Resource block that doesn't match the text/ + text criteria falls through to unsupported
+      unsupported.push(type);
+      parts.push(`[unsupported attachment: ${type} — referenced, not extracted]`);
+      continue;
+    }
+
+    if (type === "image") {
+      const mimeType =
+        typeof b["mimeType"] === "string" ? b["mimeType"] : "application/octet-stream";
+      const data = typeof b["data"] === "string" ? b["data"] : "";
+      const ext = imageExtFromMimeType(mimeType);
+      await fs.mkdir(stagingDir, { recursive: true });
+      const tempFile = path.join(stagingDir, `${crypto.randomUUID()}.${ext}`);
+      await fs.writeFile(tempFile, Buffer.from(data, "base64"));
+      let description: string;
+      try {
+        description = await describeImage(tempFile);
+      } finally {
+        await fs.unlink(tempFile).catch(() => {});
+      }
+      parts.push(`[image: ${redact(description)}]`);
+      continue;
+    }
+
+    // Anything else — audio, video, PDF resource, unknown
+    unsupported.push(type);
+    parts.push(`[unsupported attachment: ${type} — referenced, not extracted]`);
+  }
+
+  return { text: parts.join("\n"), unsupported };
 }
 
 async function summarize(text: string, model: string): Promise<string> {

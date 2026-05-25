@@ -16,6 +16,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 import {
   atomicWrite,
   exportOneSession,
+  extractAttachmentText,
   runMemorySessionExportCommand,
   shouldExport,
 } from "./memory-session-export.js";
@@ -576,5 +577,99 @@ describe("runMemorySessionExportCommand", () => {
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy.mock.calls[0]?.[0]).toMatch(/session export failed for.*22222222/);
     expect(errorSpy.mock.calls[0]?.[0]).toMatch(/API timeout on session 2/);
+  });
+});
+
+describe("extractAttachmentText", () => {
+  let stagingDir: string;
+
+  beforeEach(async () => {
+    stagingDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-extract-attachment-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(stagingDir, { recursive: true, force: true });
+  });
+
+  it("dispatches image, resource, and unknown blocks", async () => {
+    const describeImage = vi.fn(async (_filePath: string) => "a terminal screenshot");
+
+    // A resource block with text/markdown content
+    const resourceBlock = {
+      type: "resource",
+      resource: {
+        uri: "u1",
+        mimeType: "text/markdown",
+        text: "# Note",
+      },
+    };
+
+    // An image block with minimal base64 PNG data (1x1 transparent pixel)
+    const pngBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const imageBlock = {
+      type: "image",
+      mimeType: "image/png",
+      data: pngBytes.toString("base64"),
+    };
+
+    // An unknown/unsupported block type
+    const audioBlock = {
+      type: "audio",
+      data: "base64audiostub",
+    };
+
+    const result = await extractAttachmentText([resourceBlock, imageBlock, audioBlock], {
+      describeImage,
+      stagingDir,
+    });
+
+    // Resource section appears
+    expect(result.text).toContain("[resource: u1]");
+    expect(result.text).toContain("# Note");
+
+    // Image description appears
+    expect(result.text).toContain("a terminal screenshot");
+
+    // Unsupported block section appears
+    expect(result.text).toContain("[unsupported attachment: audio");
+
+    // unsupported list
+    expect(result.unsupported).toEqual(["audio"]);
+
+    // Temp image file cleaned up — staging dir should be empty
+    const remaining = await fs.readdir(stagingDir);
+    expect(remaining).toHaveLength(0);
+  });
+
+  it("redacts extracted attachment text", async () => {
+    const secretToken = "sk-openai-1234567890ABCDEFGH";
+
+    const describeImage = vi.fn(async (_filePath: string) => `screenshot: ${secretToken}`);
+
+    const imageBlock = {
+      type: "image",
+      mimeType: "image/png",
+      data: Buffer.from("fakeimagedata").toString("base64"),
+    };
+
+    const resourceBlock = {
+      type: "resource",
+      resource: {
+        uri: "secret-doc",
+        mimeType: "text/plain",
+        text: `API key: ${secretToken}`,
+      },
+    };
+
+    const result = await extractAttachmentText([imageBlock, resourceBlock], {
+      describeImage,
+      stagingDir,
+    });
+
+    // The live secret token must not appear in the output text
+    expect(result.text).not.toMatch(/sk-[A-Za-z0-9]{8,}/);
   });
 });
