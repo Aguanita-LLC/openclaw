@@ -1,5 +1,7 @@
 import type { Command } from "commander";
 import { runMemorySessionExportCommand } from "../commands/memory-session-export.js";
+import { defaultRuntime } from "../runtime.js";
+import { runCommandWithRuntime } from "./cli-utils.js";
 
 export function registerMemoryStackCli(program: Command) {
   const memoryStack = program
@@ -13,10 +15,12 @@ export function registerMemoryStackCli(program: Command) {
     .option("--force", "Re-export all sessions regardless of hash", false)
     .option("--model <provider/model>", "Summarization model", "deepseek/deepseek-v4-flash")
     .action(async (opts: { dryRun?: boolean; force?: boolean; model: string }) => {
-      await runMemorySessionExportCommand({
-        dryRun: Boolean(opts.dryRun),
-        force: Boolean(opts.force),
-        model: opts.model,
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await runMemorySessionExportCommand({
+          dryRun: Boolean(opts.dryRun),
+          force: Boolean(opts.force),
+          model: opts.model,
+        });
       });
     });
 }
