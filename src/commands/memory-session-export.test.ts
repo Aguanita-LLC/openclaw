@@ -209,6 +209,151 @@ describe("exportOneSession", () => {
       sources: [{ kind: "image" }, { kind: "resource", uri: "memory://note.md" }],
     });
   });
+
+  it("exports attachment-only sessions when attachment extraction yields text", async () => {
+    const sessionPath = path.join(tempDir, "attachment-only-session.jsonl");
+    const imageBlock = {
+      type: "image",
+      mimeType: "image/png",
+      data: Buffer.from("fake-image-bytes").toString("base64"),
+    };
+    const resourceBlock = {
+      type: "resource",
+      resource: {
+        uri: "memory://attachment-only.md",
+        mimeType: "text/markdown",
+        text: "# Attachment-only note",
+      },
+    };
+
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [imageBlock, resourceBlock],
+        },
+      }),
+    );
+
+    const entry = await buildSessionEntry(sessionPath);
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toBe("");
+
+    const summarize = vi.fn(async () => "ATTACHMENT SUMMARY");
+    const extractAttachmentText = vi.fn(async () => ({
+      text: "[image: extracted screenshot]\n[resource: memory://attachment-only.md]\n# Attachment-only note",
+      unsupported: [],
+    }));
+
+    const result = await exportOneSession(sessionPath, {
+      summarize,
+      extractAttachmentText,
+    });
+
+    expect(extractAttachmentText).toHaveBeenCalledWith([imageBlock, resourceBlock], undefined);
+    expect(summarize).toHaveBeenCalledWith(
+      [
+        "[image: extracted screenshot]",
+        "[resource: memory://attachment-only.md]",
+        "# Attachment-only note",
+      ].join("\n"),
+      "deepseek/deepseek-v4-flash",
+    );
+    expect(result).toEqual({
+      hash: entry?.hash,
+      mtimeMs: entry?.mtimeMs,
+      summary: "ATTACHMENT SUMMARY",
+      sources: [{ kind: "image" }, { kind: "resource", uri: "memory://attachment-only.md" }],
+    });
+  });
+
+  it("does not append attachment text from suppressed or inter-session messages", async () => {
+    const sessionPath = path.join(tempDir, "filtered-attachments-session.jsonl");
+    const keptImageBlock = {
+      type: "image",
+      mimeType: "image/png",
+      data: Buffer.from("kept-image-bytes").toString("base64"),
+    };
+    const suppressedResourceBlock = {
+      type: "resource",
+      resource: {
+        uri: "memory://suppressed.md",
+        mimeType: "text/markdown",
+        text: "# Suppressed attachment",
+      },
+    };
+    const interSessionResourceBlock = {
+      type: "resource",
+      resource: {
+        uri: "memory://inter-session.md",
+        mimeType: "text/markdown",
+        text: "# Inter-session attachment",
+      },
+    };
+
+    await fs.writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "Keep this" }, keptImageBlock],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: "[cron:nightly] internal prompt" },
+              suppressedResourceBlock,
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            provenance: { kind: "inter_session", sourceSessionKey: "source-session" },
+            content: [{ type: "text", text: "Forwarded instruction" }, interSessionResourceBlock],
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const entry = await buildSessionEntry(sessionPath);
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toBe("User: Keep this");
+
+    const summarize = vi.fn(async () => "FILTERED SUMMARY");
+    const extractAttachmentText = vi.fn(async () => ({
+      text: "[image: kept screenshot]",
+      unsupported: [],
+    }));
+
+    const result = await exportOneSession(sessionPath, {
+      summarize,
+      extractAttachmentText,
+    });
+
+    expect(extractAttachmentText).toHaveBeenCalledWith(
+      [{ type: "text", text: "Keep this" }, keptImageBlock],
+      undefined,
+    );
+    expect(summarize).toHaveBeenCalledWith(
+      ["User: Keep this", "[image: kept screenshot]"].join("\n"),
+      "deepseek/deepseek-v4-flash",
+    );
+    expect(result).toEqual({
+      hash: entry?.hash,
+      mtimeMs: entry?.mtimeMs,
+      summary: "FILTERED SUMMARY",
+      sources: [{ kind: "image" }],
+    });
+  });
 });
 
 describe("atomicWrite", () => {

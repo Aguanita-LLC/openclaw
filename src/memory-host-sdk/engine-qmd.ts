@@ -1,6 +1,7 @@
 export {
   buildSessionEntry,
   checkQmdBinaryAvailability,
+  extractSessionText,
   listSessionFilesForAgent,
   sessionPathForFile,
   type BuildSessionEntryOptions,

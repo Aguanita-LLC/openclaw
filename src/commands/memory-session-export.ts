@@ -9,10 +9,12 @@ import { getRuntimeConfig } from "../config/config.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import {
   buildSessionEntry,
+  extractSessionText as extractSessionTextForExport,
   listSessionFilesForAgent,
   type SessionFileEntry,
 } from "../memory-host-sdk/engine-qmd.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 
 // Container-side default workspace path (matches the qdrant-workspace-reconcile pattern).
 const DEFAULT_MEMORY_WORKSPACE_DIR = "/home/node/.openclaw/workspace";
@@ -340,6 +342,19 @@ async function collectSessionAttachmentBlocks(sessionPath: string): Promise<{
     if ((role !== "user" && role !== "assistant") || !Array.isArray(content)) {
       continue;
     }
+    if (role === "user" && hasInterSessionUserProvenance(message)) {
+      continue;
+    }
+    const hasTextBlock = content.some(
+      (block) =>
+        block !== null &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string",
+    );
+    if (hasTextBlock && extractSessionTextForExport(content, role) === null) {
+      continue;
+    }
 
     for (const block of content) {
       blocks.push(block);
@@ -401,7 +416,7 @@ export async function exportOneSession(
   const buildEntry = options.buildEntry ?? buildSessionEntry;
   const entry = await buildEntry(sessionPath);
 
-  if (!entry || entry.content.trim().length === 0) {
+  if (!entry || entry.generatedByDreamingNarrative || entry.generatedByCronRun) {
     return null;
   }
 
@@ -415,8 +430,10 @@ export async function exportOneSession(
           )
         ).text.trim()
       : "";
-  const summaryInput =
-    attachmentText.length > 0 ? `${entry.content}\n${attachmentText}` : entry.content;
+  const summaryInput = [entry.content.trim(), attachmentText].filter(Boolean).join("\n");
+  if (summaryInput.length === 0) {
+    return null;
+  }
   const summary = await (options.summarize ?? summarize)(
     summaryInput,
     options.model ?? DEFAULT_SUMMARY_MODEL,
