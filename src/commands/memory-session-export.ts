@@ -62,6 +62,12 @@ export type ExportOneSessionOptions = {
   attachmentDeps?: ExtractAttachmentDeps;
 };
 
+type PreparedSessionExport = {
+  effectiveHash: string;
+  summaryInput: string;
+  sources: SessionSummarySource[];
+};
+
 const DEFAULT_SUMMARY_MODEL = "deepseek/deepseek-v4-flash";
 const RENAME_MAX_RETRIES = 3;
 const RENAME_BASE_DELAY_MS = 50;
@@ -388,6 +394,42 @@ function sessionUuidFromEntry(entry: SessionFileEntry): string {
   return match?.[1] ?? entry.path;
 }
 
+function computeEffectiveSessionHash(entryHash: string, attachmentText: string): string {
+  const trimmedAttachmentText = attachmentText.trim();
+  if (trimmedAttachmentText === "") {
+    return entryHash;
+  }
+  return crypto
+    .createHash("sha256")
+    .update(entryHash)
+    .update("\n")
+    .update(trimmedAttachmentText)
+    .digest("hex");
+}
+
+async function prepareSessionExport(
+  sessionPath: string,
+  entry: SessionFileEntry,
+  options: Pick<ExportOneSessionOptions, "extractAttachmentText" | "attachmentDeps"> = {},
+): Promise<PreparedSessionExport> {
+  const { blocks, sources } = await collectSessionAttachmentBlocks(sessionPath);
+  const attachmentText =
+    blocks.length > 0
+      ? (
+          await (options.extractAttachmentText ?? extractAttachmentText)(
+            blocks,
+            options.attachmentDeps,
+          )
+        ).text.trim()
+      : "";
+  const summaryInput = [entry.content.trim(), attachmentText].filter(Boolean).join("\n");
+  return {
+    effectiveHash: computeEffectiveSessionHash(entry.hash, attachmentText),
+    summaryInput,
+    sources,
+  };
+}
+
 export function shouldExport(
   entry: SessionFileEntry,
   state: MemorySessionExportState,
@@ -420,17 +462,10 @@ export async function exportOneSession(
     return null;
   }
 
-  const { blocks, sources } = await collectSessionAttachmentBlocks(sessionPath);
-  const attachmentText =
-    blocks.length > 0
-      ? (
-          await (options.extractAttachmentText ?? extractAttachmentText)(
-            blocks,
-            options.attachmentDeps,
-          )
-        ).text.trim()
-      : "";
-  const summaryInput = [entry.content.trim(), attachmentText].filter(Boolean).join("\n");
+  const { effectiveHash, summaryInput, sources } = await prepareSessionExport(sessionPath, entry, {
+    extractAttachmentText: options.extractAttachmentText,
+    attachmentDeps: options.attachmentDeps,
+  });
   if (summaryInput.length === 0) {
     return null;
   }
@@ -439,7 +474,7 @@ export async function exportOneSession(
     options.model ?? DEFAULT_SUMMARY_MODEL,
   );
   return {
-    hash: entry.hash,
+    hash: effectiveHash,
     mtimeMs: entry.mtimeMs,
     summary,
     ...(sources.length > 0 ? { sources } : {}),
@@ -536,12 +571,18 @@ export async function runMemorySessionExportCommand(
 
   for (const file of files) {
     const entry = await buildEntryFn(file);
-    if (!entry || entry.content.trim() === "") {
+    if (!entry) {
       skipped++;
       continue;
     }
 
-    if (!shouldExport(entry, state, opts.force)) {
+    const { effectiveHash, summaryInput } = await prepareSessionExport(file, entry);
+    if (summaryInput.length === 0) {
+      skipped++;
+      continue;
+    }
+
+    if (!shouldExport({ ...entry, hash: effectiveHash }, state, opts.force)) {
       skipped++;
       continue;
     }

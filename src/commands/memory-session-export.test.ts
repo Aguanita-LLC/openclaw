@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,15 @@ import {
   runMemorySessionExportCommand,
   shouldExport,
 } from "./memory-session-export.js";
+
+function attachmentAwareHash(entryHash: string, attachmentText: string): string {
+  return crypto
+    .createHash("sha256")
+    .update(entryHash)
+    .update("\n")
+    .update(attachmentText.trim())
+    .digest("hex");
+}
 
 describe("exportOneSession", () => {
   let tempDir: string;
@@ -203,7 +213,10 @@ describe("exportOneSession", () => {
       "deepseek/deepseek-v4-flash",
     );
     expect(result).toEqual({
-      hash: entry?.hash,
+      hash: attachmentAwareHash(
+        entry?.hash ?? "",
+        "[image: a terminal screenshot]\n[resource: memory://note.md]\n# Embedded note",
+      ),
       mtimeMs: entry?.mtimeMs,
       summary: "SUMMARY",
       sources: [{ kind: "image" }, { kind: "resource", uri: "memory://note.md" }],
@@ -262,7 +275,10 @@ describe("exportOneSession", () => {
       "deepseek/deepseek-v4-flash",
     );
     expect(result).toEqual({
-      hash: entry?.hash,
+      hash: attachmentAwareHash(
+        entry?.hash ?? "",
+        "[image: extracted screenshot]\n[resource: memory://attachment-only.md]\n# Attachment-only note",
+      ),
       mtimeMs: entry?.mtimeMs,
       summary: "ATTACHMENT SUMMARY",
       sources: [{ kind: "image" }, { kind: "resource", uri: "memory://attachment-only.md" }],
@@ -348,7 +364,7 @@ describe("exportOneSession", () => {
       "deepseek/deepseek-v4-flash",
     );
     expect(result).toEqual({
-      hash: entry?.hash,
+      hash: attachmentAwareHash(entry?.hash ?? "", "[image: kept screenshot]"),
       mtimeMs: entry?.mtimeMs,
       summary: "FILTERED SUMMARY",
       sources: [{ kind: "image" }],
@@ -796,6 +812,100 @@ describe("runMemorySessionExportCommand", () => {
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy.mock.calls[0]?.[0]).toMatch(/session export failed for.*22222222/);
     expect(errorSpy.mock.calls[0]?.[0]).toMatch(/API timeout on session 2/);
+  });
+
+  it("re-exports when attachment-only content changes even if the transcript hash stays the same", async () => {
+    const uuid = "dddddddd-eeee-ffff-0000-111111111111";
+    const sessionPath = path.join(workspaceDir, `${uuid}.jsonl`);
+
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "resource",
+              resource: {
+                uri: "memory://attachment-only.md",
+                mimeType: "text/markdown",
+                text: "# Attachment version 1",
+              },
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    const summarizeSpy = vi.fn(async (text: string) => `SUMMARY:${text}`);
+    const writeSpy = vi.fn(async (_targetAbs: string, _body: string) => {});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    const firstResult = await runMemorySessionExportCommand(
+      { dryRun: false, force: false, model: "test/model" },
+      {
+        listSessions: async () => [sessionPath],
+        summarize: summarizeSpy,
+        writeFile: writeSpy,
+        workspaceDir,
+        agentId: "main",
+        runtime,
+      },
+    );
+
+    expect(firstResult).toEqual({ exported: 1, skipped: 0, failed: 0 });
+
+    const statePath = path.join(workspaceDir, "archive", "sessions", "daily", ".export-state.json");
+    const firstState = JSON.parse(await fs.readFile(statePath, "utf8")) as Record<
+      string,
+      { hash?: string; mtimeMs: number }
+    >;
+    const firstStoredHash = firstState[uuid]?.hash;
+    expect(firstStoredHash).toBeTruthy();
+
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "resource",
+              resource: {
+                uri: "memory://attachment-only.md",
+                mimeType: "text/markdown",
+                text: "# Attachment version 2",
+              },
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    const secondResult = await runMemorySessionExportCommand(
+      { dryRun: false, force: false, model: "test/model" },
+      {
+        listSessions: async () => [sessionPath],
+        summarize: summarizeSpy,
+        writeFile: writeSpy,
+        workspaceDir,
+        agentId: "main",
+        runtime,
+      },
+    );
+
+    expect(secondResult).toEqual({ exported: 1, skipped: 0, failed: 0 });
+    expect(summarizeSpy).toHaveBeenCalledTimes(2);
+
+    const secondState = JSON.parse(await fs.readFile(statePath, "utf8")) as Record<
+      string,
+      { hash?: string; mtimeMs: number }
+    >;
+    expect(secondState[uuid]?.hash).not.toBe(firstStoredHash);
   });
 });
 
