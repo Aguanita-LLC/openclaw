@@ -92,7 +92,7 @@ async function renameWithRetry(src: string, dest: string): Promise<void> {
         await new Promise((resolve) => setTimeout(resolve, RENAME_BASE_DELAY_MS * 2 ** attempt));
         continue;
       }
-      if (code === "EPERM" || code === "EEXIST") {
+      if (code === "EPERM" || code === "EEXIST" || code === "EXDEV") {
         await fs.copyFile(src, dest);
         await fs.unlink(src).catch(() => {});
         return;
@@ -199,7 +199,6 @@ export type RunMemorySessionExportDeps = {
   writeFile?: (targetAbs: string, body: string, stagingDir?: string) => Promise<void>;
   workspaceDir?: string;
   agentId?: string;
-  now?: () => Date;
   runtime?: RuntimeEnv;
   pathExists?: (p: string) => boolean;
 };
@@ -232,10 +231,21 @@ function formatUtcDate(ms: number): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+async function persistState(
+  statePath: string,
+  dailyDir: string,
+  state: MemorySessionExportState,
+): Promise<void> {
+  await fs.mkdir(dailyDir, { recursive: true });
+  const tempStatePath = path.join(dailyDir, `${crypto.randomUUID()}.state.tmp`);
+  await fs.writeFile(tempStatePath, JSON.stringify(state, null, 2), "utf8");
+  await fs.rename(tempStatePath, statePath);
+}
+
 export async function runMemorySessionExportCommand(
   opts: MemorySessionExportOptions,
   deps: RunMemorySessionExportDeps = {},
-): Promise<{ exported: number; skipped: number }> {
+): Promise<{ exported: number; skipped: number; failed: number }> {
   const pathExists = deps.pathExists ?? existsSync;
   const resolvedWorkspaceDir = resolveWorkspaceDir(
     deps.workspaceDir,
@@ -268,6 +278,7 @@ export async function runMemorySessionExportCommand(
 
   let exported = 0;
   let skipped = 0;
+  let failed = 0;
 
   for (const file of files) {
     const entry = await buildEntryFn(file);
@@ -291,52 +302,57 @@ export async function runMemorySessionExportCommand(
       continue;
     }
 
-    // Redact content and summarize.
-    const result = await exportOneSession(file, {
-      buildEntry: buildEntryFn,
-      summarize: summarizeFn,
-      model: opts.model,
-    });
-    if (!result) {
-      skipped++;
-      continue;
-    }
-
-    const docBody = `# Session ${uuid} (${dateStr})\n\n${result.summary}\n`;
-    const targetPath = path.join(dailyDir, dateStr, `${uuid}.md`);
-    await writeFileFn(targetPath, docBody, stagingDir);
-
-    // Append to the permanent ledger only if this uuid is not already present.
-    let indexContent = "";
     try {
-      indexContent = await fs.readFile(indexPath, "utf8");
-    } catch {
-      // index.md does not exist yet — will be created
-    }
-
-    if (!indexContent.includes(uuid)) {
-      if (indexContent === "") {
-        indexContent = "# Session Archive Index\n";
+      // Redact content and summarize.
+      const result = await exportOneSession(file, {
+        buildEntry: buildEntryFn,
+        summarize: summarizeFn,
+        model: opts.model,
+      });
+      if (!result) {
+        skipped++;
+        continue;
       }
-      indexContent += `- ${dateStr} ${uuid} -> ${dateStr}/${uuid}.md\n`;
-      await fs.mkdir(dailyDir, { recursive: true });
-      await fs.writeFile(indexPath, indexContent, "utf8");
+
+      const docBody = `# Session ${uuid} (${dateStr})\n\n${result.summary}\n`;
+      const targetPath = path.join(dailyDir, dateStr, `${uuid}.md`);
+      await writeFileFn(targetPath, docBody, stagingDir);
+
+      // Append to the permanent ledger only if this uuid is not already present.
+      let indexContent = "";
+      try {
+        indexContent = await fs.readFile(indexPath, "utf8");
+      } catch {
+        // index.md does not exist yet — will be created
+      }
+
+      if (!indexContent.includes(uuid)) {
+        if (indexContent === "") {
+          indexContent = "# Session Archive Index\n";
+        }
+        indexContent += `- ${dateStr} ${uuid} -> ${dateStr}/${uuid}.md\n`;
+        await fs.mkdir(dailyDir, { recursive: true });
+        await fs.writeFile(indexPath, indexContent, "utf8");
+      }
+
+      state[uuid] = { hash: result.hash, mtimeMs: result.mtimeMs };
+      exported++;
+
+      // Persist state immediately after each successful session so a mid-batch
+      // abort does not lose already-paid summarization work.
+      await persistState(statePath, dailyDir, state);
+    } catch (err) {
+      runtime.error(
+        `session export failed for ${file}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      failed++;
     }
-
-    state[uuid] = { hash: result.hash, mtimeMs: result.mtimeMs };
-    exported++;
-  }
-
-  // Persist updated state atomically (sibling temp in the same dir).
-  if (!opts.dryRun) {
-    await fs.mkdir(dailyDir, { recursive: true });
-    const tempStatePath = path.join(dailyDir, `${crypto.randomUUID()}.state.tmp`);
-    await fs.writeFile(tempStatePath, JSON.stringify(state, null, 2), "utf8");
-    await fs.rename(tempStatePath, statePath);
   }
 
   const modeLabel = opts.dryRun ? "dry-run" : "apply";
-  runtime.log(`Session export (${modeLabel}): exported ${exported}, skipped ${skipped}`);
+  runtime.log(
+    `Session export (${modeLabel}): exported ${exported}, skipped ${skipped}, failed ${failed}`,
+  );
 
-  return { exported, skipped };
+  return { exported, skipped, failed };
 }

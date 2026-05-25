@@ -205,6 +205,31 @@ describe("atomicWrite", () => {
 
     await expect(fs.readFile(target, "utf8")).resolves.toBe("second body");
   });
+
+  it("falls back to copyFile+unlink when rename reports EXDEV (cross-device)", async () => {
+    const target = path.join(tempDir, "raw", "session.md");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, "old body", "utf8");
+
+    const renameSpy = vi
+      .spyOn(fs, "rename")
+      .mockRejectedValueOnce(
+        Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" }),
+      );
+    const copyFileSpy = vi.spyOn(fs, "copyFile");
+    const unlinkSpy = vi.spyOn(fs, "unlink");
+
+    await atomicWrite(target, "new body");
+
+    expect(renameSpy).toHaveBeenCalledTimes(1);
+    expect(copyFileSpy).toHaveBeenCalledTimes(1);
+    expect(unlinkSpy).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("new body");
+
+    renameSpy.mockRestore();
+    copyFileSpy.mockRestore();
+    unlinkSpy.mockRestore();
+  });
 });
 
 describe("shouldExport", () => {
@@ -315,7 +340,7 @@ describe("runMemorySessionExportCommand", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it("exports a changed session: writes archive file, index line, state; returns {exported:1, skipped:0}", async () => {
+  it("exports a changed session: writes archive file, index line, state; returns {exported:1, skipped:0, failed:0}", async () => {
     const uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     const entry = makeEntry(uuid);
     // mtimeMs = 1_700_000_000_000 → 2023-11-14 in UTC
@@ -336,12 +361,11 @@ describe("runMemorySessionExportCommand", () => {
         writeFile: writeSpy,
         workspaceDir,
         agentId: "main",
-        now: () => new Date("2023-11-15T00:00:00Z"),
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       },
     );
 
-    expect(result).toEqual({ exported: 1, skipped: 0 });
+    expect(result).toEqual({ exported: 1, skipped: 0, failed: 0 });
 
     // archive file written
     const archivePath = path.join(
@@ -401,12 +425,12 @@ describe("runMemorySessionExportCommand", () => {
       },
     );
 
-    expect(result).toEqual({ exported: 0, skipped: 1 });
+    expect(result).toEqual({ exported: 0, skipped: 1, failed: 0 });
     expect(writeSpy).not.toHaveBeenCalled();
     expect(summarizeSpy).not.toHaveBeenCalled();
   });
 
-  it("dry-run: returns {exported:1, skipped:0} but writes nothing and does not call summarize", async () => {
+  it("dry-run: returns {exported:1, skipped:0, failed:0} but writes nothing and does not call summarize", async () => {
     const uuid = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
     const entry = makeEntry(uuid);
 
@@ -426,7 +450,7 @@ describe("runMemorySessionExportCommand", () => {
       },
     );
 
-    expect(result).toEqual({ exported: 1, skipped: 0 });
+    expect(result).toEqual({ exported: 1, skipped: 0, failed: 0 });
     expect(summarizeSpy).not.toHaveBeenCalled();
     expect(writeSpy).not.toHaveBeenCalled();
 
@@ -470,5 +494,87 @@ describe("runMemorySessionExportCommand", () => {
 
     // Also verify the expected date appears in the index
     expect(indexContent).toContain(expectedDate);
+  });
+
+  it("failure isolation: one failing summarize does not abort the batch; resolves with failed:1 and persists state for the two successful sessions", async () => {
+    const uuid1 = "11111111-1111-1111-1111-111111111111";
+    const uuid2 = "22222222-2222-2222-2222-222222222222";
+    const uuid3 = "33333333-3333-3333-3333-333333333333";
+
+    const entry1 = makeEntry(uuid1);
+    const entry2 = makeEntry(uuid2);
+    const entry3 = makeEntry(uuid3);
+
+    const entriesByFile: Record<string, SessionFileEntry> = {
+      [`/sessions/${uuid1}.jsonl`]: entry1,
+      [`/sessions/${uuid2}.jsonl`]: entry2,
+      [`/sessions/${uuid3}.jsonl`]: entry3,
+    };
+
+    const writtenFiles: Record<string, string> = {};
+    const writeSpy = vi.fn(async (targetAbs: string, body: string) => {
+      writtenFiles[targetAbs] = body;
+    });
+
+    // summarize rejects on the 2nd session only
+    const summarizeSpy = vi
+      .fn()
+      .mockResolvedValueOnce("Summary for session 1")
+      .mockRejectedValueOnce(new Error("API timeout on session 2"))
+      .mockResolvedValueOnce("Summary for session 3");
+
+    const errorSpy = vi.fn();
+
+    const result = await runMemorySessionExportCommand(
+      { dryRun: false, force: true, model: "test/model" },
+      {
+        listSessions: async () => [
+          `/sessions/${uuid1}.jsonl`,
+          `/sessions/${uuid2}.jsonl`,
+          `/sessions/${uuid3}.jsonl`,
+        ],
+        buildEntry: async (file: string) => entriesByFile[file] ?? null,
+        summarize: summarizeSpy,
+        writeFile: writeSpy,
+        workspaceDir,
+        agentId: "main",
+        runtime: { log: vi.fn(), error: errorSpy, exit: vi.fn() },
+      },
+    );
+
+    // (a) command resolves, does NOT throw
+    expect(result).toEqual({ exported: 2, skipped: 0, failed: 1 });
+
+    // (b) failed:1, other two in exported
+    expect(result.exported).toBe(2);
+    expect(result.failed).toBe(1);
+
+    // (c) sessions 1 and 3 have state entries persisted on disk
+    const statePath = path.join(workspaceDir, "archive", "sessions", "daily", ".export-state.json");
+    const stateContent = JSON.parse(await fs.readFile(statePath, "utf8")) as Record<
+      string,
+      { hash?: string; mtimeMs: number }
+    >;
+    expect(stateContent[uuid1]).toEqual({ hash: entry1.hash, mtimeMs: entry1.mtimeMs });
+    expect(stateContent[uuid3]).toEqual({ hash: entry3.hash, mtimeMs: entry3.mtimeMs });
+
+    // (d) the failing session (uuid2) has no state entry and no archive file written
+    expect(stateContent[uuid2]).toBeUndefined();
+
+    const expectedDate = "2023-11-14";
+    const archivePath2 = path.join(
+      workspaceDir,
+      "archive",
+      "sessions",
+      "daily",
+      expectedDate,
+      `${uuid2}.md`,
+    );
+    expect(writtenFiles[archivePath2]).toBeUndefined();
+
+    // error was logged for the failing session
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]?.[0]).toMatch(/session export failed for.*22222222/);
+    expect(errorSpy.mock.calls[0]?.[0]).toMatch(/API timeout on session 2/);
   });
 });
