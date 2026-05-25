@@ -13,7 +13,12 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import { atomicWrite, exportOneSession, shouldExport } from "./memory-session-export.js";
+import {
+  atomicWrite,
+  exportOneSession,
+  runMemorySessionExportCommand,
+  shouldExport,
+} from "./memory-session-export.js";
 
 describe("exportOneSession", () => {
   let tempDir: string;
@@ -242,5 +247,228 @@ describe("shouldExport", () => {
 
     expect(shouldExport(entry, state, false)).toBe(false);
     expect(shouldExport({ ...entry, mtimeMs: 101 }, state, false)).toBe(true);
+  });
+});
+
+describe("atomicWrite (with explicit stagingDir)", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-session-export-staging-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("stages temp under explicit stagingDir and final file lands at target", async () => {
+    const targetDir = path.join(tempDir, "archive", "sessions", "daily", "2024-01-15");
+    const target = path.join(targetDir, "uuid-abc.md");
+    const stagingDir = path.join(tempDir, "raw", ".staging");
+
+    const openSpy = vi.spyOn(fs, "open");
+    const renameSpy = vi.spyOn(fs, "rename");
+
+    await atomicWrite(target, "session body", stagingDir);
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(renameSpy).toHaveBeenCalledTimes(1);
+
+    const [openedPath] = openSpy.mock.calls[0] ?? [];
+    const [renameFrom, renameTo] = renameSpy.mock.calls[0] ?? [];
+
+    expect(path.dirname(openedPath as string)).toBe(stagingDir);
+    expect(path.basename(openedPath as string)).toMatch(/.+\.tmp$/);
+    expect(renameFrom).toBe(openedPath);
+    expect(renameTo).toBe(target);
+
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("session body");
+    await expect(fs.readdir(stagingDir)).resolves.toEqual([]);
+
+    openSpy.mockRestore();
+    renameSpy.mockRestore();
+  });
+});
+
+describe("runMemorySessionExportCommand", () => {
+  let workspaceDir: string;
+
+  function makeEntry(uuid: string, overrides: Partial<SessionFileEntry> = {}): SessionFileEntry {
+    return {
+      path: `agent/sessions/${uuid}.jsonl`,
+      absPath: `/tmp/${uuid}.jsonl`,
+      mtimeMs: 1_700_000_000_000,
+      size: 42,
+      hash: "hash-abc",
+      content: "User: hello\nAssistant: hi",
+      lineMap: [1, 2],
+      messageTimestampsMs: [0, 1000],
+      ...overrides,
+    };
+  }
+
+  beforeEach(async () => {
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-export-cmd-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  it("exports a changed session: writes archive file, index line, state; returns {exported:1, skipped:0}", async () => {
+    const uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const entry = makeEntry(uuid);
+    // mtimeMs = 1_700_000_000_000 → 2023-11-14 in UTC
+    const expectedDate = "2023-11-14";
+
+    const writtenFiles: Record<string, string> = {};
+    const writeSpy = vi.fn(async (targetAbs: string, body: string) => {
+      writtenFiles[targetAbs] = body;
+    });
+    const summarizeSpy = vi.fn(async () => "This session summary");
+
+    const result = await runMemorySessionExportCommand(
+      { dryRun: false, force: false, model: "test/model" },
+      {
+        listSessions: async () => [`/sessions/${uuid}.jsonl`],
+        buildEntry: async () => entry,
+        summarize: summarizeSpy,
+        writeFile: writeSpy,
+        workspaceDir,
+        agentId: "main",
+        now: () => new Date("2023-11-15T00:00:00Z"),
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      },
+    );
+
+    expect(result).toEqual({ exported: 1, skipped: 0 });
+
+    // archive file written
+    const archivePath = path.join(
+      workspaceDir,
+      "archive",
+      "sessions",
+      "daily",
+      expectedDate,
+      `${uuid}.md`,
+    );
+    expect(writeSpy).toHaveBeenCalledWith(
+      archivePath,
+      expect.stringContaining(`# Session ${uuid} (${expectedDate})`),
+      path.join(workspaceDir, "raw", ".staging"),
+    );
+    expect(writeSpy.mock.calls[0]?.[1]).toContain("This session summary");
+
+    // index.md appended
+    const indexPath = path.join(workspaceDir, "archive", "sessions", "daily", "index.md");
+    const indexContent = await fs.readFile(indexPath, "utf8");
+    expect(indexContent).toContain(uuid);
+    expect(indexContent).toContain(expectedDate);
+
+    // state persisted
+    const statePath = path.join(workspaceDir, "archive", "sessions", "daily", ".export-state.json");
+    const stateContent = JSON.parse(await fs.readFile(statePath, "utf8")) as Record<
+      string,
+      { hash?: string; mtimeMs: number }
+    >;
+    expect(stateContent[uuid]).toEqual({ hash: entry.hash, mtimeMs: entry.mtimeMs });
+  });
+
+  it("skips an unchanged session and does not call summarize", async () => {
+    const uuid = "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff";
+    const entry = makeEntry(uuid);
+
+    const stateDir = path.join(workspaceDir, "archive", "sessions", "daily");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, ".export-state.json"),
+      JSON.stringify({ [uuid]: { hash: entry.hash, mtimeMs: entry.mtimeMs } }),
+    );
+
+    const writeSpy = vi.fn();
+    const summarizeSpy = vi.fn();
+
+    const result = await runMemorySessionExportCommand(
+      { dryRun: false, force: false, model: "test/model" },
+      {
+        listSessions: async () => [`/sessions/${uuid}.jsonl`],
+        buildEntry: async () => entry,
+        summarize: summarizeSpy,
+        writeFile: writeSpy,
+        workspaceDir,
+        agentId: "main",
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      },
+    );
+
+    expect(result).toEqual({ exported: 0, skipped: 1 });
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(summarizeSpy).not.toHaveBeenCalled();
+  });
+
+  it("dry-run: returns {exported:1, skipped:0} but writes nothing and does not call summarize", async () => {
+    const uuid = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    const entry = makeEntry(uuid);
+
+    const writeSpy = vi.fn();
+    const summarizeSpy = vi.fn();
+
+    const result = await runMemorySessionExportCommand(
+      { dryRun: true, force: false, model: "test/model" },
+      {
+        listSessions: async () => [`/sessions/${uuid}.jsonl`],
+        buildEntry: async () => entry,
+        summarize: summarizeSpy,
+        writeFile: writeSpy,
+        workspaceDir,
+        agentId: "main",
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      },
+    );
+
+    expect(result).toEqual({ exported: 1, skipped: 0 });
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    expect(writeSpy).not.toHaveBeenCalled();
+
+    // no archive file
+    const archivePath = path.join(workspaceDir, "archive", "sessions", "daily");
+    await expect(fs.access(archivePath)).rejects.toThrow();
+  });
+
+  it("does not duplicate the index line on re-export", async () => {
+    const uuid = "cccccccc-dddd-eeee-ffff-000000000000";
+    const entry = makeEntry(uuid);
+    const expectedDate = "2023-11-14";
+
+    const writtenFiles: Record<string, string> = {};
+    const writeSpy = vi.fn(async (targetAbs: string, body: string) => {
+      writtenFiles[targetAbs] = body;
+    });
+
+    const deps = {
+      listSessions: async () => [`/sessions/${uuid}.jsonl`],
+      buildEntry: async () => entry,
+      summarize: vi.fn(async () => "summary"),
+      writeFile: writeSpy,
+      workspaceDir,
+      agentId: "main",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    };
+
+    // Export once (force to re-run even after state written)
+    await runMemorySessionExportCommand({ dryRun: false, force: true, model: "test/model" }, deps);
+
+    // Clear state so it would export again by default (force=true bypasses state check)
+    await runMemorySessionExportCommand({ dryRun: false, force: true, model: "test/model" }, deps);
+
+    const indexPath = path.join(workspaceDir, "archive", "sessions", "daily", "index.md");
+    const indexContent = await fs.readFile(indexPath, "utf8");
+    // Count ledger lines containing the uuid — must be exactly 1 (uuid appears twice per
+    // line in the format "- <date> <uuid> -> <date>/<uuid>.md", so count lines not raw hits).
+    const ledgerLines = indexContent.split("\n").filter((line) => line.includes(uuid));
+    expect(ledgerLines.length).toBe(1);
+
+    // Also verify the expected date appears in the index
+    expect(indexContent).toContain(expectedDate);
   });
 });

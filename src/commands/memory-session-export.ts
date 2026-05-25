@@ -2,8 +2,20 @@ import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { buildSessionEntry, type SessionFileEntry } from "../memory-host-sdk/engine-qmd.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { getRuntimeConfig } from "../config/config.js";
+import {
+  buildSessionEntry,
+  listSessionFilesForAgent,
+  type SessionFileEntry,
+} from "../memory-host-sdk/engine-qmd.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+
+// Container-side default workspace path (matches the qdrant-workspace-reconcile pattern).
+const DEFAULT_MEMORY_WORKSPACE_DIR = "/home/node/.openclaw/workspace";
+const MEMORY_WORKSPACE_DIR_ENV = "OPENCLAW_MEMORY_WORKSPACE_DIR";
 
 export type MemorySessionExportOptions = {
   dryRun: boolean;
@@ -46,13 +58,17 @@ function resolveStagingDir(targetAbs: string): string {
   return path.join(path.dirname(targetAbs), ".staging");
 }
 
-export async function atomicWrite(targetAbs: string, body: string): Promise<void> {
+export async function atomicWrite(
+  targetAbs: string,
+  body: string,
+  stagingDir?: string,
+): Promise<void> {
   const targetDir = path.dirname(targetAbs);
-  const stagingDir = resolveStagingDir(targetAbs);
-  const tempPath = path.join(stagingDir, `${crypto.randomUUID()}.tmp`);
+  const resolvedStagingDir = stagingDir ?? resolveStagingDir(targetAbs);
+  const tempPath = path.join(resolvedStagingDir, `${crypto.randomUUID()}.tmp`);
 
   await fs.mkdir(targetDir, { recursive: true });
-  await fs.mkdir(stagingDir, { recursive: true });
+  await fs.mkdir(resolvedStagingDir, { recursive: true });
 
   const handle = await fs.open(tempPath, "w");
   try {
@@ -176,6 +192,151 @@ export async function exportOneSession(
   };
 }
 
-export async function runMemorySessionExportCommand(_opts: MemorySessionExportOptions) {
-  return { exported: 0, skipped: 0 };
+export type RunMemorySessionExportDeps = {
+  listSessions?: (agentId: string) => Promise<string[]>;
+  buildEntry?: (p: string) => Promise<SessionFileEntry | null>;
+  summarize?: (text: string, model: string) => Promise<string>;
+  writeFile?: (targetAbs: string, body: string, stagingDir?: string) => Promise<void>;
+  workspaceDir?: string;
+  agentId?: string;
+  now?: () => Date;
+  runtime?: RuntimeEnv;
+  pathExists?: (p: string) => boolean;
+};
+
+function resolveWorkspaceDir(
+  overrideDir: string | undefined,
+  envOverride: string | undefined,
+  pathExists: (p: string) => boolean,
+): string {
+  if (overrideDir !== undefined) {
+    return overrideDir;
+  }
+  if (envOverride !== undefined) {
+    return envOverride;
+  }
+  // Use the container default when inside the container, otherwise fall back
+  // to the host-side path — matching the qdrant-workspace-reconcile pattern.
+  if (pathExists(DEFAULT_MEMORY_WORKSPACE_DIR)) {
+    return DEFAULT_MEMORY_WORKSPACE_DIR;
+  }
+  return path.join(os.homedir(), ".openclaw", "workspace");
+}
+
+function formatUtcDate(ms: number): string {
+  // Group sessions by the UTC calendar day of their last-modified timestamp.
+  const d = new Date(ms);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+export async function runMemorySessionExportCommand(
+  opts: MemorySessionExportOptions,
+  deps: RunMemorySessionExportDeps = {},
+): Promise<{ exported: number; skipped: number }> {
+  const pathExists = deps.pathExists ?? existsSync;
+  const resolvedWorkspaceDir = resolveWorkspaceDir(
+    deps.workspaceDir,
+    process.env[MEMORY_WORKSPACE_DIR_ENV],
+    pathExists,
+  );
+  const resolvedAgentId = deps.agentId ?? resolveDefaultAgentId(getRuntimeConfig());
+  const runtime = deps.runtime ?? defaultRuntime;
+  const listSessions = deps.listSessions ?? listSessionFilesForAgent;
+  const buildEntryFn = deps.buildEntry ?? buildSessionEntry;
+  const summarizeFn = deps.summarize ?? summarize;
+  const writeFileFn = deps.writeFile ?? atomicWrite;
+
+  const stagingDir = path.join(resolvedWorkspaceDir, "raw", ".staging");
+  const dailyDir = path.join(resolvedWorkspaceDir, "archive", "sessions", "daily");
+  const statePath = path.join(dailyDir, ".export-state.json");
+  const indexPath = path.join(dailyDir, "index.md");
+
+  // Read persisted export state (missing → empty).
+  let state: MemorySessionExportState = {};
+  try {
+    const raw = await fs.readFile(statePath, "utf8");
+    state = JSON.parse(raw) as MemorySessionExportState;
+  } catch {
+    // state file missing or unreadable — start fresh
+  }
+
+  // Sort for deterministic ordering (prompt-cache rule).
+  const files = (await listSessions(resolvedAgentId)).slice().sort();
+
+  let exported = 0;
+  let skipped = 0;
+
+  for (const file of files) {
+    const entry = await buildEntryFn(file);
+    if (!entry || entry.content.trim() === "") {
+      skipped++;
+      continue;
+    }
+
+    if (!shouldExport(entry, state, opts.force)) {
+      skipped++;
+      continue;
+    }
+
+    const uuid = sessionUuidFromEntry(entry);
+    // Use UTC day of the session file's last-modified timestamp for archive grouping.
+    const dateStr = formatUtcDate(entry.mtimeMs);
+
+    if (opts.dryRun) {
+      // Dry-run: count as a would-export candidate but write nothing and skip summarization.
+      exported++;
+      continue;
+    }
+
+    // Redact content and summarize.
+    const result = await exportOneSession(file, {
+      buildEntry: buildEntryFn,
+      summarize: summarizeFn,
+      model: opts.model,
+    });
+    if (!result) {
+      skipped++;
+      continue;
+    }
+
+    const docBody = `# Session ${uuid} (${dateStr})\n\n${result.summary}\n`;
+    const targetPath = path.join(dailyDir, dateStr, `${uuid}.md`);
+    await writeFileFn(targetPath, docBody, stagingDir);
+
+    // Append to the permanent ledger only if this uuid is not already present.
+    let indexContent = "";
+    try {
+      indexContent = await fs.readFile(indexPath, "utf8");
+    } catch {
+      // index.md does not exist yet — will be created
+    }
+
+    if (!indexContent.includes(uuid)) {
+      if (indexContent === "") {
+        indexContent = "# Session Archive Index\n";
+      }
+      indexContent += `- ${dateStr} ${uuid} -> ${dateStr}/${uuid}.md\n`;
+      await fs.mkdir(dailyDir, { recursive: true });
+      await fs.writeFile(indexPath, indexContent, "utf8");
+    }
+
+    state[uuid] = { hash: result.hash, mtimeMs: result.mtimeMs };
+    exported++;
+  }
+
+  // Persist updated state atomically (sibling temp in the same dir).
+  if (!opts.dryRun) {
+    await fs.mkdir(dailyDir, { recursive: true });
+    const tempStatePath = path.join(dailyDir, `${crypto.randomUUID()}.state.tmp`);
+    await fs.writeFile(tempStatePath, JSON.stringify(state, null, 2), "utf8");
+    await fs.rename(tempStatePath, statePath);
+  }
+
+  const modeLabel = opts.dryRun ? "dry-run" : "apply";
+  runtime.log(`Session export (${modeLabel}): exported ${exported}, skipped ${skipped}`);
+
+  return { exported, skipped };
 }
