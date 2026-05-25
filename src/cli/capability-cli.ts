@@ -587,6 +587,24 @@ function requireModelRunPrompt(value: unknown): string {
   return value;
 }
 
+async function readModelRunPromptFromStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    throw new Error(
+      "--prompt-stdin refuses to read from an interactive terminal; pipe input or use --prompt <text>.",
+    );
+  }
+  const chunks: string[] = [];
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) {
+    chunks.push(String(chunk));
+  }
+  const text = chunks.join("");
+  if (normalizeOptionalString(text) === undefined) {
+    throw new Error("--prompt cannot be empty or whitespace-only.");
+  }
+  return text;
+}
+
 type ModelRunImageFile = {
   path: string;
   fileName: string;
@@ -1605,7 +1623,8 @@ export function registerCapabilityCli(program: Command) {
   model
     .command("run")
     .description("Run a one-shot model turn")
-    .requiredOption("--prompt <text>", "Prompt text")
+    .option("--prompt <text>", "Prompt text")
+    .option("--prompt-stdin", "Read the prompt from stdin (size-safe for large prompts)", false)
     .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
     .option("--local", "Force local execution", false)
@@ -1613,7 +1632,14 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const prompt = requireModelRunPrompt(opts.prompt);
+        const hasPrompt = opts.prompt !== undefined;
+        const hasPromptStdin = Boolean(opts.promptStdin);
+        if (hasPrompt === hasPromptStdin) {
+          throw new Error("provide exactly one of --prompt or --prompt-stdin.");
+        }
+        const prompt = hasPromptStdin
+          ? await readModelRunPromptFromStdin()
+          : requireModelRunPrompt(opts.prompt);
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),

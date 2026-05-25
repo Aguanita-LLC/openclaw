@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
@@ -713,6 +714,72 @@ describe("capability cli", () => {
     );
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("reads the prompt from stdin when --prompt-stdin is given", async () => {
+    const originalStdin = process.stdin;
+    const fakeStdin = Readable.from(["piped prompt text"]) as NodeJS.ReadStream;
+    (fakeStdin as unknown as { isTTY: boolean }).isTTY = false;
+    Object.defineProperty(process, "stdin", { value: fakeStdin, configurable: true });
+    try {
+      await runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "model", "run", "--prompt-stdin", "--json"],
+      });
+    } finally {
+      Object.defineProperty(process, "stdin", { value: originalStdin, configurable: true });
+    }
+
+    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: {
+          messages: [
+            expect.objectContaining({
+              role: "user",
+              content: "piped prompt text",
+            }),
+          ],
+        },
+      }),
+    );
+  });
+
+  it("errors when both --prompt and --prompt-stdin are given", async () => {
+    const originalStdin = process.stdin;
+    const fakeStdin = Readable.from(["piped text"]) as NodeJS.ReadStream;
+    (fakeStdin as unknown as { isTTY: boolean }).isTTY = false;
+    Object.defineProperty(process, "stdin", { value: fakeStdin, configurable: true });
+    try {
+      await expect(
+        runRegisteredCli({
+          register: registerCapabilityCli as (program: Command) => void,
+          argv: ["capability", "model", "run", "--prompt", "hello", "--prompt-stdin", "--json"],
+        }),
+      ).rejects.toThrow("exit 1");
+    } finally {
+      Object.defineProperty(process, "stdin", { value: originalStdin, configurable: true });
+    }
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("provide exactly one of --prompt or --prompt-stdin"),
+    );
+    expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+  });
+
+  it("errors when neither --prompt nor --prompt-stdin is given", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "model", "run", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("provide exactly one of --prompt or --prompt-stdin"),
+    );
+    expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
 
   it("defaults tts status to gateway transport", async () => {

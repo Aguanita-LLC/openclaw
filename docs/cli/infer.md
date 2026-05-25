@@ -169,6 +169,7 @@ Notes:
 - `model run --file` is best when you want to test the selected multimodal text model directly. Use `infer image describe` when you want OpenClaw's image-understanding provider selection and default image-model routing.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
 - `model run --prompt` must contain non-whitespace text; empty prompts are rejected before local providers or the Gateway are called.
+- Use `--prompt-stdin` instead of `--prompt` when the prompt text is large (for example, a full session transcript). `--prompt-stdin` reads the prompt from stdin, which avoids OS command-line length limits. Exactly one of `--prompt` or `--prompt-stdin` must be provided; providing both or neither is an error. `--prompt-stdin` refuses an interactive terminal; pipe input or use `--prompt <text>`.
 - Local `model run` exits non-zero when the provider returns no text output, so unreachable local providers and empty completions do not look like successful probes.
 - Use `model run --gateway` when you need to test Gateway routing, agent-runtime setup, or Gateway-managed provider state while keeping the model input raw. Use `openclaw agent` or chat surfaces when you want the full agent context, tools, memory, and session transcript.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.
