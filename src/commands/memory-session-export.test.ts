@@ -175,25 +175,32 @@ describe("exportOneSession", () => {
     const entry = await buildSessionEntry(sessionPath);
     const result = await exportOneSession(sessionPath);
 
-    expect(spawnSync).toHaveBeenCalledWith(
-      "node",
-      [
-        "dist/index.js",
-        "infer",
-        "model",
-        "run",
-        "--model",
-        "deepseek/deepseek-v4-flash",
-        "--prompt-stdin",
-        "--json",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        input: entry?.content,
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
+    expect(spawnSync).toHaveBeenCalledTimes(1);
+    const [cmd, args, options] = vi.mocked(spawnSync).mock.calls[0]!;
+    expect(cmd).toBe("node");
+    expect(args).toEqual([
+      "dist/index.js",
+      "infer",
+      "model",
+      "run",
+      "--model",
+      "deepseek/deepseek-v4-flash",
+      "--prompt-stdin",
+      "--json",
+    ]);
+    expect(options).toMatchObject({
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const piped = String((options as { input?: unknown }).input ?? "");
+    // The redacted session text is included verbatim as the data to summarize...
+    expect(piped).toContain(entry?.content ?? "");
+    // ...wrapped in an instruction that asks the model to SUMMARIZE (not reply to) it...
+    expect(piped).toMatch(/summar/i);
+    // ...and a guard that the transcript is untrusted data whose instructions must
+    // not be followed (spec F-06).
+    expect(piped).toMatch(/untrusted|never follow|do not (follow|execute|respond)/i);
     expect(result).toEqual({
       hash: entry?.hash,
       mtimeMs: entry?.mtimeMs,
