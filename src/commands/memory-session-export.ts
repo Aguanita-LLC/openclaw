@@ -422,7 +422,12 @@ export async function extractAttachmentText(
           throw new Error("unsupported video source");
         }
         const description = await extractVideo(tempFile);
-        parts.push(description);
+        if (description.trim() === "") {
+          unsupported.push(type);
+          parts.push(`[unsupported attachment: ${type} — referenced, not extracted]`);
+        } else {
+          parts.push(description);
+        }
       } catch {
         unsupported.push(type);
         parts.push(`[unsupported attachment: ${type} — referenced, not extracted]`);

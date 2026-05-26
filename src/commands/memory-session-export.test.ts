@@ -1526,6 +1526,28 @@ describe("extractAttachmentText", () => {
     expect(remaining).toHaveLength(0);
   });
 
+  it("marks a video attachment unsupported when extraction returns no surviving content", async () => {
+    const extractVideo = vi.fn(async (_absPath: string) => "");
+
+    const result = await extractAttachmentText(
+      [
+        {
+          type: "video",
+          mimeType: "video/mp4",
+          data: Buffer.from("fake-video-bytes").toString("base64"),
+        },
+      ],
+      {
+        extractVideo,
+        stagingDir,
+      },
+    );
+
+    expect(extractVideo).toHaveBeenCalledTimes(1);
+    expect(result.text).toContain("[unsupported attachment: video — referenced, not extracted]");
+    expect(result.unsupported).toEqual(["video"]);
+  });
+
   it("includes video attachment content and local file state in the exported hash", async () => {
     const videoPath = path.join(stagingDir, "clip.mp4");
     await fs.writeFile(videoPath, "video-v1", "utf8");
