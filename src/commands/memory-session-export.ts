@@ -146,6 +146,7 @@ function resolveInferCliCwd(): string {
 
 export type ExtractAttachmentDeps = {
   describeImage?: (filePath: string) => Promise<string>;
+  transcribe?: (filePath: string) => Promise<string>;
   stagingDir?: string;
   redact?: (text: string) => string;
 };
@@ -157,6 +158,57 @@ function imageExtFromMimeType(mimeType: string): string {
   if (mimeType === "image/gif") return "gif";
   if (mimeType === "image/webp") return "webp";
   return "bin";
+}
+
+/** Map an audio mimeType to a short file extension. */
+function audioExtFromMimeType(mimeType: string): string {
+  if (mimeType === "audio/mpeg" || mimeType === "audio/mp3") return "mp3";
+  if (mimeType === "audio/wav" || mimeType === "audio/x-wav") return "wav";
+  if (mimeType === "audio/ogg") return "ogg";
+  if (mimeType === "audio/m4a" || mimeType === "audio/mp4") return "m4a";
+  if (mimeType === "audio/webm") return "webm";
+  if (mimeType === "audio/flac") return "flac";
+  return "bin";
+}
+
+async function defaultTranscribe(filePath: string): Promise<string> {
+  const result = spawnSync(
+    "node",
+    [
+      "dist/index.js",
+      "infer",
+      "audio",
+      "transcribe",
+      "--file",
+      filePath,
+      "--model",
+      "openai/gpt-4o-transcribe",
+      "--json",
+    ],
+    {
+      cwd: resolveInferCliCwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      typeof result.stderr === "string" && result.stderr.trim() !== ""
+        ? result.stderr.trim()
+        : `infer audio transcribe failed with status ${result.status ?? "unknown"}`,
+    );
+  }
+  const parsed = JSON.parse(result.stdout || "{}") as {
+    outputs?: Array<{ text?: unknown }>;
+  };
+  const outputText = parsed.outputs?.find((output) => typeof output.text === "string")?.text;
+  if (typeof outputText !== "string") {
+    throw new Error("infer audio transcribe did not return a string text output");
+  }
+  return outputText;
 }
 
 async function defaultDescribeImage(filePath: string): Promise<string> {
@@ -273,7 +325,28 @@ export async function extractAttachmentText(
       continue;
     }
 
-    // Anything else — audio, video, PDF resource, unknown
+    if (type === "audio") {
+      const transcribe = deps.transcribe ?? defaultTranscribe;
+      const mimeType =
+        typeof b["mimeType"] === "string" ? b["mimeType"] : "application/octet-stream";
+      const data = typeof b["data"] === "string" ? b["data"] : "";
+      const ext = audioExtFromMimeType(mimeType);
+      await fs.mkdir(stagingDir, { recursive: true });
+      const tempFile = path.join(stagingDir, `${crypto.randomUUID()}.${ext}`);
+      await fs.writeFile(tempFile, Buffer.from(data, "base64"));
+      try {
+        const transcript = await transcribe(tempFile);
+        parts.push(`[audio: ${redact(transcript)}]`);
+      } catch {
+        unsupported.push(type);
+        parts.push(`[unsupported attachment: ${type} — referenced, not extracted]`);
+      } finally {
+        await fs.unlink(tempFile).catch(() => {});
+      }
+      continue;
+    }
+
+    // Anything else — video, PDF resource, unknown
     unsupported.push(type);
     parts.push(`[unsupported attachment: ${type} — referenced, not extracted]`);
   }

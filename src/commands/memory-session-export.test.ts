@@ -1432,6 +1432,117 @@ describe("extractAttachmentText", () => {
     expect(remaining).toHaveLength(0);
   });
 
+  it("transcribes an audio block via injected transcribe and writes the result inline", async () => {
+    const transcribe = vi.fn(async (_filePath: string) => "hello world");
+
+    const audioBlock = {
+      type: "audio",
+      mimeType: "audio/ogg",
+      data: Buffer.from("fake-audio-bytes").toString("base64"),
+    };
+
+    const result = await extractAttachmentText([audioBlock], {
+      transcribe,
+      stagingDir,
+    });
+
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    expect(result.text).toContain("[audio: hello world]");
+    expect(result.unsupported).toEqual([]);
+
+    // Temp audio file cleaned up — staging dir should be empty
+    const remaining = await fs.readdir(stagingDir);
+    expect(remaining).toHaveLength(0);
+  });
+
+  it("redacts the audio transcript before including it", async () => {
+    const secret = "sk-openai-1234567890ABCDEFGH";
+    const transcribe = vi.fn(async (_filePath: string) => `audio note: ${secret}`);
+
+    const result = await extractAttachmentText(
+      [
+        {
+          type: "audio",
+          mimeType: "audio/wav",
+          data: Buffer.from("fake-audio-bytes").toString("base64"),
+        },
+      ],
+      { transcribe, stagingDir },
+    );
+
+    expect(result.text).not.toContain(secret);
+    expect(result.text).not.toMatch(/sk-[A-Za-z0-9]{8,}/);
+  });
+
+  it("degrades audio transcribe failures to an unsupported placeholder", async () => {
+    const transcribe = vi.fn(async (_filePath: string) => {
+      throw new Error("transcribe failed");
+    });
+
+    const result = await extractAttachmentText(
+      [
+        {
+          type: "audio",
+          mimeType: "audio/wav",
+          data: Buffer.from("fake-audio-bytes").toString("base64"),
+        },
+      ],
+      { transcribe, stagingDir },
+    );
+
+    expect(result.text).toContain("[unsupported attachment: audio");
+    expect(result.unsupported).toEqual(["audio"]);
+
+    // Temp audio file cleaned up even on failure
+    const remaining = await fs.readdir(stagingDir);
+    expect(remaining).toHaveLength(0);
+  });
+
+  it("uses the default transcribe (shells `infer audio transcribe`) when no dep is injected", async () => {
+    vi.mocked(spawnSync).mockReset();
+    vi.mocked(spawnSync).mockReturnValue({
+      error: undefined,
+      status: 0,
+      stdout: JSON.stringify({
+        ok: true,
+        capability: "audio.transcribe",
+        transport: "local",
+        outputs: [{ text: "fallback transcript", kind: "audio.transcription" }],
+      }),
+      stderr: "",
+    } as ReturnType<typeof spawnSync>);
+
+    const result = await extractAttachmentText(
+      [
+        {
+          type: "audio",
+          mimeType: "audio/wav",
+          data: Buffer.from("fake-audio-bytes").toString("base64"),
+        },
+      ],
+      { stagingDir },
+    );
+
+    expect(spawnSync).toHaveBeenCalledTimes(1);
+    const [cmd, args] = vi.mocked(spawnSync).mock.calls[0]!;
+    expect(cmd).toBe("node");
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "dist/index.js",
+        "infer",
+        "audio",
+        "transcribe",
+        "--file",
+        expect.stringMatching(/\.wav$/),
+        "--model",
+        "openai/gpt-4o-transcribe",
+        "--json",
+      ]),
+    );
+    expect(result.text).toContain("[audio: fallback transcript]");
+    expect(result.unsupported).toEqual([]);
+  });
+
   it("redacts extracted attachment text", async () => {
     const secretToken = "sk-openai-1234567890ABCDEFGH";
 
