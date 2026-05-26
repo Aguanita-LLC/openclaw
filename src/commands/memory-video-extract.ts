@@ -243,7 +243,11 @@ export async function extractVideoText(
     const result = await executeFfmpeg(absPath, { tempDir, frameCap });
     const frameDescriptions: string[] = [];
     for (const framePath of result.framePaths.slice(0, frameCap)) {
-      frameDescriptions.push(redact(await describeImage(framePath)));
+      try {
+        frameDescriptions.push(redact(await describeImage(framePath)));
+      } catch {
+        continue;
+      }
     }
 
     const parts: string[] = [];
@@ -251,7 +255,11 @@ export async function extractVideoText(
       parts.push(`[video frames: ${frameDescriptions.join(" | ")}]`);
     }
     if (result.audioPath) {
-      parts.push(`[video audio: ${redact(await transcribe(result.audioPath))}]`);
+      try {
+        parts.push(`[video audio: ${redact(await transcribe(result.audioPath))}]`);
+      } catch {
+        // Keep frame output even when audio transcription fails.
+      }
     }
     return parts.join("\n");
   } finally {

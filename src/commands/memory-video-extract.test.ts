@@ -115,4 +115,80 @@ describe("extractVideoText", () => {
     expect(result).toContain("[video frames: dark frame]");
     expect(result).not.toContain("[video audio:");
   });
+
+  it("keeps successful frame descriptions when one frame caption fails", async () => {
+    const inputPath = path.join(tempDir, "partial-frames.mp4");
+    await fs.writeFile(inputPath, "fake video bytes", "utf8");
+
+    let frame1 = "";
+    let frame2 = "";
+    let frame3 = "";
+
+    const runFfmpeg = vi.fn(async (_absPath: string, deps: { tempDir: string }) => {
+      frame1 = path.join(deps.tempDir, "frame_00001.jpg");
+      frame2 = path.join(deps.tempDir, "frame_00002.jpg");
+      frame3 = path.join(deps.tempDir, "frame_00003.jpg");
+      await fs.mkdir(deps.tempDir, { recursive: true });
+      await fs.writeFile(frame1, "frame-1", "utf8");
+      await fs.writeFile(frame2, "frame-2", "utf8");
+      await fs.writeFile(frame3, "frame-3", "utf8");
+      return {
+        framePaths: [frame1, frame2, frame3],
+      };
+    });
+    const describeImage = vi.fn(async (filePath: string) => {
+      if (filePath === frame1) {
+        return "first frame";
+      }
+      if (filePath === frame2) {
+        throw new Error("caption failed");
+      }
+      return "third frame";
+    });
+
+    const result = await extractVideoText(inputPath, {
+      runFfmpeg,
+      describeImage,
+      frameCap: 3,
+      stagingDir: tempDir,
+    });
+
+    expect(result).toContain("[video frames: first frame | third frame]");
+    expect(result).not.toContain("[video audio:");
+  });
+
+  it("returns frame descriptions when audio transcription fails", async () => {
+    const inputPath = path.join(tempDir, "audio-failure.mp4");
+    await fs.writeFile(inputPath, "fake video bytes", "utf8");
+
+    let frame1 = "";
+    let audioPath = "";
+
+    const runFfmpeg = vi.fn(async (_absPath: string, deps: { tempDir: string }) => {
+      frame1 = path.join(deps.tempDir, "frame_00001.jpg");
+      audioPath = path.join(deps.tempDir, "audio.wav");
+      await fs.mkdir(deps.tempDir, { recursive: true });
+      await fs.writeFile(frame1, "frame-1", "utf8");
+      await fs.writeFile(audioPath, "audio", "utf8");
+      return {
+        framePaths: [frame1],
+        audioPath,
+      };
+    });
+    const describeImage = vi.fn(async (_filePath: string) => "first frame");
+    const transcribe = vi.fn(async (_filePath: string) => {
+      throw new Error("transcribe failed");
+    });
+
+    const result = await extractVideoText(inputPath, {
+      runFfmpeg,
+      describeImage,
+      transcribe,
+      frameCap: 1,
+      stagingDir: tempDir,
+    });
+
+    expect(result).toContain("[video frames: first frame]");
+    expect(result).not.toContain("[video audio:");
+  });
 });
