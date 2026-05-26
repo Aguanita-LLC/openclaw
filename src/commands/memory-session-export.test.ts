@@ -1526,6 +1526,51 @@ describe("extractAttachmentText", () => {
     expect(remaining).toHaveLength(0);
   });
 
+  it("includes video attachment content and local file state in the exported hash", async () => {
+    const videoPath = path.join(stagingDir, "clip.mp4");
+    await fs.writeFile(videoPath, "video-v1", "utf8");
+
+    const sessionPath = path.join(stagingDir, "video-session.jsonl");
+    await fs.writeFile(
+      sessionPath,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "video",
+              mimeType: "video/mp4",
+              uri: `file://${videoPath}`,
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    const summarize = vi.fn(async () => "VIDEO SUMMARY");
+    const extractVideo = vi.fn(async () => "[video frames: frame one]");
+
+    const first = await exportOneSession(sessionPath, {
+      summarize,
+      extractAttachmentText: extractAttachmentText,
+      attachmentDeps: { extractVideo, stagingDir },
+    });
+
+    await fs.writeFile(videoPath, "video-v2-with-different-bytes", "utf8");
+
+    const second = await exportOneSession(sessionPath, {
+      summarize,
+      extractAttachmentText: extractAttachmentText,
+      attachmentDeps: { extractVideo, stagingDir },
+    });
+
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(first?.hash).not.toBe(second?.hash);
+  });
+
   it("uses the default transcribe (shells `infer audio transcribe`) when no dep is injected", async () => {
     vi.mocked(spawnSync).mockReset();
     vi.mocked(spawnSync).mockReturnValue({

@@ -587,31 +587,66 @@ function computeEffectiveSessionHash(entryHash: string, attachmentFingerprint: s
     .digest("hex");
 }
 
-function buildAttachmentFingerprint(blocks: unknown[]): string {
-  const normalizedBlocks = blocks.flatMap((block) => {
+function sha256ForString(value: string): string {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+async function getLocalFileMetadata(
+  uri: string,
+): Promise<{ size: number; mtimeMs: number } | null> {
+  try {
+    const localPath = uri.startsWith("file://") ? new URL(uri) : path.isAbsolute(uri) ? uri : null;
+    if (!localPath) {
+      return null;
+    }
+    const stats = await fs.stat(localPath);
+    return { size: stats.size, mtimeMs: stats.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+async function buildAttachmentFingerprint(blocks: unknown[]): Promise<string> {
+  const normalizedBlocks: unknown[] = [];
+  for (const block of blocks) {
     if (!block || typeof block !== "object") {
-      return [];
+      continue;
     }
 
     const typedBlock = block as Record<string, unknown>;
     if (typedBlock["type"] === "text") {
-      return [];
+      continue;
     }
 
     if (typedBlock["type"] === "image") {
-      return [
-        {
-          type: "image",
-          mimeType:
-            typeof typedBlock["mimeType"] === "string"
-              ? typedBlock["mimeType"]
-              : "application/octet-stream",
-          dataSha256: crypto
-            .createHash("sha256")
-            .update(typeof typedBlock["data"] === "string" ? typedBlock["data"] : "")
-            .digest("hex"),
-        },
-      ];
+      normalizedBlocks.push({
+        type: "image",
+        mimeType:
+          typeof typedBlock["mimeType"] === "string"
+            ? typedBlock["mimeType"]
+            : "application/octet-stream",
+        dataSha256: sha256ForString(
+          typeof typedBlock["data"] === "string" ? typedBlock["data"] : "",
+        ),
+      });
+      continue;
+    }
+
+    if (typedBlock["type"] === "video") {
+      const uri = typeof typedBlock["uri"] === "string" ? typedBlock["uri"] : undefined;
+      normalizedBlocks.push({
+        type: "video",
+        mimeType:
+          typeof typedBlock["mimeType"] === "string"
+            ? typedBlock["mimeType"]
+            : "application/octet-stream",
+        ...(typeof typedBlock["data"] === "string"
+          ? { dataSha256: sha256ForString(typedBlock["data"]) }
+          : {}),
+        ...(uri ? { uri: redactForExport(uri) } : {}),
+        ...(uri ? { localFile: await getLocalFileMetadata(uri) } : {}),
+      });
+      continue;
     }
 
     if (typedBlock["type"] === "resource") {
@@ -619,22 +654,19 @@ function buildAttachmentFingerprint(blocks: unknown[]): string {
         typedBlock["resource"] !== null && typeof typedBlock["resource"] === "object"
           ? (typedBlock["resource"] as Record<string, unknown>)
           : null;
-      return [
-        {
-          type: "resource",
-          ...(typeof resource?.["uri"] === "string"
-            ? { uri: redactForExport(resource["uri"]) }
-            : {}),
-          ...(typeof resource?.["mimeType"] === "string" ? { mimeType: resource["mimeType"] } : {}),
-          ...(typeof resource?.["text"] === "string"
-            ? { text: redactForExport(resource["text"]) }
-            : {}),
-        },
-      ];
+      normalizedBlocks.push({
+        type: "resource",
+        ...(typeof resource?.["uri"] === "string" ? { uri: redactForExport(resource["uri"]) } : {}),
+        ...(typeof resource?.["mimeType"] === "string" ? { mimeType: resource["mimeType"] } : {}),
+        ...(typeof resource?.["text"] === "string"
+          ? { text: redactForExport(resource["text"]) }
+          : {}),
+      });
+      continue;
     }
 
-    return [{ type: typedBlock["type"] }];
-  });
+    normalizedBlocks.push({ type: typedBlock["type"] });
+  }
 
   return JSON.stringify(normalizedBlocks);
 }
@@ -660,7 +692,7 @@ async function analyzeSessionForExport(
   entry: SessionFileEntry,
 ): Promise<SessionExportAnalysis> {
   const { blocks, sources } = await collectSessionAttachmentBlocks(sessionPath);
-  const attachmentFingerprint = buildAttachmentFingerprint(blocks);
+  const attachmentFingerprint = await buildAttachmentFingerprint(blocks);
   return {
     blocks,
     effectiveHash: computeEffectiveSessionHash(entry.hash, attachmentFingerprint),

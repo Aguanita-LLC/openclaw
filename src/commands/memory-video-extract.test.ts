@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -74,5 +75,44 @@ describe("extractVideoText", () => {
     expect(result).not.toContain("sk-secret-token-1234567890");
     expect(ffmpegDir).not.toBe("");
     await expect(fs.stat(ffmpegDir)).rejects.toThrow();
+  });
+
+  it("extracts at least one frame from a short silent clip and omits audio text", async () => {
+    const inputPath = path.join(tempDir, "short-silent.mp4");
+    const createClip = spawnSync(
+      "ffmpeg",
+      [
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=320x240:d=2",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        inputPath,
+      ],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    expect(createClip.status).toBe(0);
+
+    const describeImage = vi.fn(async (_filePath: string) => "dark frame");
+    const transcribe = vi.fn(async (_filePath: string) => "should not run");
+
+    const result = await extractVideoText(inputPath, {
+      describeImage,
+      transcribe,
+      frameCap: 4,
+      stagingDir: tempDir,
+    });
+
+    expect(describeImage).toHaveBeenCalledTimes(1);
+    expect(transcribe).not.toHaveBeenCalled();
+    expect(result).toContain("[video frames: dark frame]");
+    expect(result).not.toContain("[video audio:");
   });
 });

@@ -121,7 +121,7 @@ async function defaultTranscribe(filePath: string): Promise<string> {
   return outputText;
 }
 
-function runFfmpegCommand(args: string[]): void {
+function runFfmpegCommand(args: string[]): ReturnType<typeof spawnSync> {
   const result = spawnSync(
     "nice",
     ["-n", "15", "ionice", "-c3", "ffmpeg", "-threads", "1", ...args],
@@ -133,13 +133,32 @@ function runFfmpegCommand(args: string[]): void {
   if (result.error) {
     throw result.error;
   }
-  if (result.status !== 0) {
-    throw new Error(
-      typeof result.stderr === "string" && result.stderr.trim() !== ""
-        ? result.stderr.trim()
-        : `ffmpeg failed with status ${result.status ?? "unknown"}`,
-    );
+  return result;
+}
+
+function readFfmpegError(result: ReturnType<typeof spawnSync>): string {
+  return typeof result.stderr === "string" && result.stderr.trim() !== ""
+    ? result.stderr.trim()
+    : `ffmpeg failed with status ${result.status ?? "unknown"}`;
+}
+
+function assertFfmpegSucceeded(result: ReturnType<typeof spawnSync>): void {
+  if (result.error) {
+    throw result.error;
   }
+  if (result.status !== 0) {
+    throw new Error(readFfmpegError(result));
+  }
+}
+
+function isMissingAudioResult(result: ReturnType<typeof spawnSync>): boolean {
+  const stderr = typeof result.stderr === "string" ? result.stderr : "";
+  return (
+    result.status !== 0 &&
+    /does not contain any stream|matches no streams|output file #0 does not contain any stream/i.test(
+      stderr,
+    )
+  );
 }
 
 export async function runFfmpeg(absPath: string, deps: RunFfmpegDeps): Promise<RunFfmpegResult> {
@@ -148,7 +167,7 @@ export async function runFfmpeg(absPath: string, deps: RunFfmpegDeps): Promise<R
 
   await fs.mkdir(deps.tempDir, { recursive: true });
 
-  runFfmpegCommand([
+  const frameResult = runFfmpegCommand([
     "-i",
     absPath,
     "-vf",
@@ -157,17 +176,55 @@ export async function runFfmpeg(absPath: string, deps: RunFfmpegDeps): Promise<R
     String(deps.frameCap),
     framePattern,
   ]);
+  assertFfmpegSucceeded(frameResult);
 
-  runFfmpegCommand(["-i", absPath, "-vn", "-ac", "1", "-ar", "16000", audioPath]);
-
-  const framePaths = (await fs.readdir(deps.tempDir))
+  let framePaths = (await fs.readdir(deps.tempDir))
     .filter((entry) => /^frame_\d+\.jpg$/.test(entry))
     .sort()
     .map((entry) => path.join(deps.tempDir, entry));
 
+  if (framePaths.length === 0 && deps.frameCap > 0) {
+    const fallbackFramePattern = path.join(deps.tempDir, "frame_%05d.jpg");
+    const fallbackFrameResult = runFfmpegCommand([
+      "-i",
+      absPath,
+      "-vf",
+      "select='eq(n,0)',scale='min(1280,iw)':-2",
+      "-frames:v",
+      "1",
+      fallbackFramePattern,
+    ]);
+    assertFfmpegSucceeded(fallbackFrameResult);
+    framePaths = (await fs.readdir(deps.tempDir))
+      .filter((entry) => /^frame_\d+\.jpg$/.test(entry))
+      .sort()
+      .map((entry) => path.join(deps.tempDir, entry));
+  }
+
+  const audioResult = runFfmpegCommand([
+    "-i",
+    absPath,
+    "-map",
+    "0:a:0?",
+    "-vn",
+    "-ac",
+    "1",
+    "-ar",
+    "16000",
+    audioPath,
+  ]);
+  if (!isMissingAudioResult(audioResult)) {
+    assertFfmpegSucceeded(audioResult);
+  }
+
+  const hasAudio = await fs
+    .stat(audioPath)
+    .then(() => true)
+    .catch(() => false);
+
   return {
     framePaths,
-    audioPath,
+    ...(hasAudio ? { audioPath } : {}),
   };
 }
 
