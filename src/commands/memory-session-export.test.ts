@@ -1498,6 +1498,34 @@ describe("extractAttachmentText", () => {
     expect(remaining).toHaveLength(0);
   });
 
+  it("dispatches a video block through extractVideo", async () => {
+    const extractVideo = vi.fn(async (_absPath: string) => {
+      return "[video frames: hallway | screen share]\n[video audio: quick status update]";
+    });
+
+    const result = await extractAttachmentText(
+      [
+        {
+          type: "video",
+          mimeType: "video/mp4",
+          data: Buffer.from("fake-video-bytes").toString("base64"),
+        },
+      ],
+      {
+        extractVideo,
+        stagingDir,
+      },
+    );
+
+    expect(extractVideo).toHaveBeenCalledTimes(1);
+    expect(result.text).toContain("[video frames: hallway | screen share]");
+    expect(result.text).toContain("[video audio: quick status update]");
+    expect(result.unsupported).toEqual([]);
+
+    const remaining = await fs.readdir(stagingDir);
+    expect(remaining).toHaveLength(0);
+  });
+
   it("uses the default transcribe (shells `infer audio transcribe`) when no dep is injected", async () => {
     vi.mocked(spawnSync).mockReset();
     vi.mocked(spawnSync).mockReturnValue({

@@ -16,6 +16,7 @@ import {
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractPdfText } from "./memory-pdf-extract.js";
+import { extractVideoText } from "./memory-video-extract.js";
 
 // Container-side default workspace path (matches the qdrant-workspace-reconcile pattern).
 const DEFAULT_MEMORY_WORKSPACE_DIR = "/home/node/.openclaw/workspace";
@@ -149,6 +150,7 @@ export type ExtractAttachmentDeps = {
   describeImage?: (filePath: string) => Promise<string>;
   transcribe?: (filePath: string) => Promise<string>;
   extractPdf?: (absPath: string) => Promise<{ text: string; unsupported: string[] }>;
+  extractVideo?: (absPath: string) => Promise<string>;
   stagingDir?: string;
   redact?: (text: string) => string;
 };
@@ -170,6 +172,16 @@ function audioExtFromMimeType(mimeType: string): string {
   if (mimeType === "audio/m4a" || mimeType === "audio/mp4") return "m4a";
   if (mimeType === "audio/webm") return "webm";
   if (mimeType === "audio/flac") return "flac";
+  return "bin";
+}
+
+/** Map a video mimeType to a short file extension. */
+function videoExtFromMimeType(mimeType: string): string {
+  if (mimeType === "video/mp4") return "mp4";
+  if (mimeType === "video/webm") return "webm";
+  if (mimeType === "video/quicktime") return "mov";
+  if (mimeType === "video/x-matroska") return "mkv";
+  if (mimeType === "video/x-msvideo") return "avi";
   return "bin";
 }
 
@@ -373,6 +385,44 @@ export async function extractAttachmentText(
       try {
         const transcript = await transcribe(tempFile);
         parts.push(`[audio: ${redact(transcript)}]`);
+      } catch {
+        unsupported.push(type);
+        parts.push(`[unsupported attachment: ${type} — referenced, not extracted]`);
+      } finally {
+        await fs.unlink(tempFile).catch(() => {});
+      }
+      continue;
+    }
+
+    if (type === "video") {
+      const extractVideo =
+        deps.extractVideo ??
+        ((absPath: string) =>
+          extractVideoText(absPath, {
+            describeImage,
+            transcribe: deps.transcribe ?? defaultTranscribe,
+            stagingDir,
+            redact,
+          }));
+      const mimeType =
+        typeof b["mimeType"] === "string" ? b["mimeType"] : "application/octet-stream";
+      const data = typeof b["data"] === "string" ? b["data"] : undefined;
+      const uri = typeof b["uri"] === "string" ? b["uri"] : undefined;
+      const ext = videoExtFromMimeType(mimeType);
+      await fs.mkdir(stagingDir, { recursive: true });
+      const tempFile = path.join(stagingDir, `${crypto.randomUUID()}.${ext}`);
+      try {
+        if (data) {
+          await fs.writeFile(tempFile, Buffer.from(data, "base64"));
+        } else if (uri?.startsWith("file://")) {
+          await fs.copyFile(new URL(uri), tempFile);
+        } else if (uri && path.isAbsolute(uri)) {
+          await fs.copyFile(uri, tempFile);
+        } else {
+          throw new Error("unsupported video source");
+        }
+        const description = await extractVideo(tempFile);
+        parts.push(description);
       } catch {
         unsupported.push(type);
         parts.push(`[unsupported attachment: ${type} — referenced, not extracted]`);
