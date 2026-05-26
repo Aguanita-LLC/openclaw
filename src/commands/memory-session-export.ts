@@ -15,6 +15,7 @@ import {
 } from "../memory-host-sdk/engine-qmd.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { extractPdfText } from "./memory-pdf-extract.js";
 
 // Container-side default workspace path (matches the qdrant-workspace-reconcile pattern).
 const DEFAULT_MEMORY_WORKSPACE_DIR = "/home/node/.openclaw/workspace";
@@ -147,6 +148,7 @@ function resolveInferCliCwd(): string {
 export type ExtractAttachmentDeps = {
   describeImage?: (filePath: string) => Promise<string>;
   transcribe?: (filePath: string) => Promise<string>;
+  extractPdf?: (absPath: string) => Promise<{ text: string; unsupported: string[] }>;
   stagingDir?: string;
   redact?: (text: string) => string;
 };
@@ -285,21 +287,55 @@ export async function extractAttachmentText(
     }
 
     if (type === "resource") {
-      // Treat any resource with inline string text as text-bearing content, even if mimeType is absent.
       const resource = b["resource"];
-      if (
-        resource !== null &&
-        typeof resource === "object" &&
-        typeof (resource as Record<string, unknown>)["text"] === "string"
-      ) {
+      if (resource !== null && typeof resource === "object") {
         const r = resource as Record<string, unknown>;
         const uri = typeof r["uri"] === "string" ? r["uri"] : undefined;
         const label = uri !== undefined ? `[resource: ${redact(uri)}]` : `[resource]`;
-        const rawText = r["text"] as string;
-        parts.push(`${label}\n${redact(rawText)}`);
-        continue;
+
+        // Inline text resource (markdown/text/etc.) — include verbatim, redacted.
+        if (typeof r["text"] === "string") {
+          parts.push(`${label}\n${redact(r["text"] as string)}`);
+          continue;
+        }
+
+        // PDF resource — write the inline base64 blob to a temp file and dispatch
+        // to the PDF extractor (text layer + scanned-page vision fallback).
+        const mimeType = typeof r["mimeType"] === "string" ? r["mimeType"] : "";
+        if (mimeType === "application/pdf" && typeof r["blob"] === "string") {
+          const extractPdf =
+            deps.extractPdf ??
+            ((absPath: string) =>
+              extractPdfText(absPath, {
+                describeImage: deps.describeImage ?? defaultDescribeImage,
+                stagingDir,
+                redact,
+              }));
+          await fs.mkdir(stagingDir, { recursive: true });
+          const tempFile = path.join(stagingDir, `${crypto.randomUUID()}.pdf`);
+          await fs.writeFile(tempFile, Buffer.from(r["blob"] as string, "base64"));
+          try {
+            const result = await extractPdf(tempFile);
+            const body = result.text.trim();
+            if (body !== "") {
+              parts.push(`${label}\n${body}`);
+            } else {
+              unsupported.push(type);
+              parts.push(`[unsupported attachment: ${type} — pdf yielded no extractable text]`);
+            }
+            if (result.unsupported.length > 0) {
+              unsupported.push(...result.unsupported);
+            }
+          } catch {
+            unsupported.push(type);
+            parts.push(`[unsupported attachment: ${type} — referenced, not extracted]`);
+          } finally {
+            await fs.unlink(tempFile).catch(() => {});
+          }
+          continue;
+        }
       }
-      // Resource block that doesn't match the text/ + text criteria falls through to unsupported
+      // Resource block that didn't match a known shape — record as unsupported.
       unsupported.push(type);
       parts.push(`[unsupported attachment: ${type} — referenced, not extracted]`);
       continue;

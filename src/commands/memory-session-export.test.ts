@@ -1543,6 +1543,41 @@ describe("extractAttachmentText", () => {
     expect(result.unsupported).toEqual([]);
   });
 
+  it("dispatches a resource block with mimeType application/pdf through extractPdf", async () => {
+    const pdfBlob = Buffer.from("%PDF-1.4 fake bytes").toString("base64");
+    const extractPdf = vi.fn(async (_absPath: string) => ({
+      text: "Extracted PDF page text",
+      unsupported: [],
+    }));
+
+    const result = await extractAttachmentText(
+      [
+        {
+          type: "resource",
+          resource: {
+            uri: "memory://attachments/doc.pdf",
+            mimeType: "application/pdf",
+            blob: pdfBlob,
+          },
+        },
+      ],
+      { extractPdf, stagingDir },
+    );
+
+    expect(extractPdf).toHaveBeenCalledTimes(1);
+    const tempPath = extractPdf.mock.calls[0]![0];
+    expect(typeof tempPath).toBe("string");
+    expect(tempPath.endsWith(".pdf")).toBe(true);
+
+    expect(result.text).toContain("[resource: memory://attachments/doc.pdf]");
+    expect(result.text).toContain("Extracted PDF page text");
+    expect(result.unsupported).toEqual([]);
+
+    // Temp pdf cleaned up
+    const remaining = await fs.readdir(stagingDir);
+    expect(remaining).toHaveLength(0);
+  });
+
   it("redacts extracted attachment text", async () => {
     const secretToken = "sk-openai-1234567890ABCDEFGH";
 
