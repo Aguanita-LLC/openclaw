@@ -1312,7 +1312,7 @@ describe("extractAttachmentText", () => {
     await fs.rm(stagingDir, { recursive: true, force: true });
   });
 
-  it("dispatches image, resource, and unknown blocks", async () => {
+  it("dispatches image, resource, and genuinely unknown blocks", async () => {
     const describeImage = vi.fn(async (_filePath: string) => "a terminal screenshot");
 
     // A resource block with text/markdown content
@@ -1337,12 +1337,12 @@ describe("extractAttachmentText", () => {
     };
 
     // An unknown/unsupported block type
-    const audioBlock = {
-      type: "audio",
-      data: "base64audiostub",
+    const unknownBlock = {
+      type: "mystery-attachment",
+      data: "opaque-stub",
     };
 
-    const result = await extractAttachmentText([resourceBlock, imageBlock, audioBlock], {
+    const result = await extractAttachmentText([resourceBlock, imageBlock, unknownBlock], {
       describeImage,
       stagingDir,
     });
@@ -1355,10 +1355,10 @@ describe("extractAttachmentText", () => {
     expect(result.text).toContain("a terminal screenshot");
 
     // Unsupported block section appears
-    expect(result.text).toContain("[unsupported attachment: audio");
+    expect(result.text).toContain("[unsupported attachment: mystery-attachment");
 
     // unsupported list
-    expect(result.unsupported).toEqual(["audio"]);
+    expect(result.unsupported).toEqual(["mystery-attachment"]);
 
     // Temp image file cleaned up — staging dir should be empty
     const remaining = await fs.readdir(stagingDir);
