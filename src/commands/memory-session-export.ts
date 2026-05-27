@@ -63,6 +63,11 @@ export type ExportOneSessionOptions = {
     deps?: ExtractAttachmentDeps,
   ) => Promise<{ text: string; unsupported: string[] }>;
   attachmentDeps?: ExtractAttachmentDeps;
+  extractInlineMedia?: (
+    text: string,
+    deps?: ExtractInlineMediaDeps,
+  ) => Promise<{ text: string; unsupported: string[] }>;
+  inlineMediaDeps?: ExtractInlineMediaDeps;
   analysis?: SessionExportAnalysis;
 };
 
@@ -263,6 +268,56 @@ async function defaultDescribeImage(filePath: string): Promise<string> {
     throw new Error("infer image describe did not return a string text output");
   }
   return outputText;
+}
+
+// Matches: [media attached: /path (mime; params) | /path]\n<media:...> (N file(s))
+const MEDIA_ATTACHED_RE =
+  /\[media attached: ([^\s(]+) \(([^);]+)(?:[^)]*)\)(?:[^\]]*)\](?:\n<media:[^\n]*)?/g;
+
+export type ExtractInlineMediaDeps = {
+  transcribe?: (filePath: string) => Promise<string>;
+  redact?: (text: string) => string;
+  fileExists?: (filePath: string) => boolean;
+};
+
+export async function extractInlineMediaText(
+  text: string,
+  deps: ExtractInlineMediaDeps = {},
+): Promise<{ text: string; unsupported: string[] }> {
+  const transcribe = deps.transcribe ?? defaultTranscribe;
+  const redact = deps.redact ?? redactForExport;
+  const fileExists = deps.fileExists ?? existsSync;
+
+  const unsupported: string[] = [];
+  let result = text;
+  const matches = [...text.matchAll(MEDIA_ATTACHED_RE)];
+
+  for (const match of matches) {
+    const [fullMatch, filePath, mimeBase] = match;
+    const mimeType = mimeBase.trim();
+
+    if (!mimeType.startsWith("audio/")) {
+      continue;
+    }
+
+    let replacement: string;
+    if (!fileExists(filePath)) {
+      unsupported.push("audio");
+      replacement = "[unsupported attachment: audio — file not found]";
+    } else {
+      try {
+        const transcript = await transcribe(filePath);
+        replacement = `[audio: ${redact(transcript)}]`;
+      } catch {
+        unsupported.push("audio");
+        replacement = "[unsupported attachment: audio — transcription failed]";
+      }
+    }
+
+    result = result.replace(fullMatch, replacement);
+  }
+
+  return { text: result, unsupported };
 }
 
 export async function extractAttachmentText(
@@ -743,6 +798,13 @@ export async function exportOneSession(
     return null;
   }
 
+  const sessionText = (
+    await (options.extractInlineMedia ?? extractInlineMediaText)(
+      entry.content,
+      options.inlineMediaDeps,
+    )
+  ).text;
+
   const attachmentText =
     analysis.blocks.length > 0
       ? (
@@ -752,7 +814,7 @@ export async function exportOneSession(
           )
         ).text.trim()
       : "";
-  const summaryInput = [entry.content.trim(), attachmentText].filter(Boolean).join("\n");
+  const summaryInput = [sessionText.trim(), attachmentText].filter(Boolean).join("\n");
   if (summaryInput.length === 0) {
     return null;
   }

@@ -19,6 +19,7 @@ import {
   atomicWrite,
   exportOneSession,
   extractAttachmentText,
+  extractInlineMediaText,
   runMemorySessionExportCommand,
   shouldExport,
 } from "./memory-session-export.js";
@@ -480,6 +481,108 @@ describe("exportOneSession", () => {
     });
     expect(JSON.stringify(result)).not.toContain("sk-openai-1234567890ABCDEFGH");
     expect(JSON.stringify(result)).not.toContain("shhh-secret-value");
+  });
+});
+
+describe("extractInlineMediaText", () => {
+  const AUDIO_PATH = "/home/node/.openclaw/media/inbound/voice-message.ogg";
+  const AUDIO_REF = `[media attached: ${AUDIO_PATH} (audio/ogg; codecs=opus) | ${AUDIO_PATH}]\n<media:document> (1 file)`;
+
+  it("replaces an audio media ref with the transcribed text", async () => {
+    const transcribe = vi.fn().mockResolvedValue("Hello from voice message");
+    const result = await extractInlineMediaText(AUDIO_REF, {
+      transcribe,
+      fileExists: () => true,
+    });
+    expect(result.text).toBe("[audio: Hello from voice message]");
+    expect(transcribe).toHaveBeenCalledWith(AUDIO_PATH);
+    expect(result.unsupported).toEqual([]);
+  });
+
+  it("redacts the transcript before including it", async () => {
+    const secret = "sk-openai-1234567890ABCDEFGH";
+    const transcribe = vi.fn().mockResolvedValue(`I said ${secret} is my key`);
+    const redact = (t: string) => t.replace(secret, "[REDACTED]");
+    const result = await extractInlineMediaText(AUDIO_REF, {
+      transcribe,
+      fileExists: () => true,
+      redact,
+    });
+    expect(result.text).not.toContain(secret);
+    expect(result.text).toContain("[REDACTED]");
+  });
+
+  it("emits unsupported marker when the audio file does not exist", async () => {
+    const transcribe = vi.fn();
+    const result = await extractInlineMediaText(AUDIO_REF, {
+      transcribe,
+      fileExists: () => false,
+    });
+    expect(result.text).toBe("[unsupported attachment: audio — file not found]");
+    expect(transcribe).not.toHaveBeenCalled();
+    expect(result.unsupported).toContain("audio");
+  });
+
+  it("emits unsupported marker when transcription throws", async () => {
+    const transcribe = vi.fn().mockRejectedValue(new Error("Whisper failed"));
+    const result = await extractInlineMediaText(AUDIO_REF, {
+      transcribe,
+      fileExists: () => true,
+    });
+    expect(result.text).toBe("[unsupported attachment: audio — transcription failed]");
+    expect(result.unsupported).toContain("audio");
+  });
+
+  it("leaves non-audio media refs unchanged", async () => {
+    const imgRef = `[media attached: /path/to/photo.png (image/png) | /path/to/photo.png]`;
+    const transcribe = vi.fn();
+    const result = await extractInlineMediaText(imgRef, {
+      transcribe,
+      fileExists: () => true,
+    });
+    expect(result.text).toBe(imgRef);
+    expect(transcribe).not.toHaveBeenCalled();
+    expect(result.unsupported).toEqual([]);
+  });
+
+  it("processes multiple audio refs in a single text block", async () => {
+    const path1 = "/media/inbound/a.ogg";
+    const path2 = "/media/inbound/b.ogg";
+    const text = `[media attached: ${path1} (audio/ogg) | ${path1}]\n[media attached: ${path2} (audio/mp3) | ${path2}]`;
+    const transcribe = vi
+      .fn()
+      .mockResolvedValueOnce("first message")
+      .mockResolvedValueOnce("second message");
+    const result = await extractInlineMediaText(text, {
+      transcribe,
+      fileExists: () => true,
+    });
+    expect(result.text).toBe("[audio: first message]\n[audio: second message]");
+    expect(transcribe).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns text unchanged when there are no media refs", async () => {
+    const plain = "Just some regular session text.";
+    const transcribe = vi.fn();
+    const result = await extractInlineMediaText(plain, {
+      transcribe,
+      fileExists: () => true,
+    });
+    expect(result.text).toBe(plain);
+    expect(transcribe).not.toHaveBeenCalled();
+  });
+
+  it("transcribes audio and leaves non-audio unchanged in mixed text", async () => {
+    const imgRef = `[media attached: /path/photo.png (image/png) | /path/photo.png]`;
+    const mixed = `${AUDIO_REF}\n${imgRef}`;
+    const transcribe = vi.fn().mockResolvedValue("spoken words");
+    const result = await extractInlineMediaText(mixed, {
+      transcribe,
+      fileExists: () => true,
+    });
+    expect(result.text).toContain("[audio: spoken words]");
+    expect(result.text).toContain(imgRef);
+    expect(transcribe).toHaveBeenCalledTimes(1);
   });
 });
 
