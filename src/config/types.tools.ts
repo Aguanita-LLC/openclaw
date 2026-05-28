@@ -188,6 +188,11 @@ export type ToolLoopDetectionConfig = {
   detectors?: ToolLoopDetectionDetectorConfig;
   /** Post-compaction loop guard: aborts when the agent repeats the same (tool, args, result) immediately after auto-compaction-retry. */
   postCompactionGuard?: ToolLoopPostCompactionGuardConfig;
+  /** Per-run model inference call budget. A threshold of 0 disables the budget. */
+  modelCallBudget?: {
+    /** Abort the run when this many model calls occur (0 = disabled). */
+    criticalThreshold?: number;
+  };
 };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";

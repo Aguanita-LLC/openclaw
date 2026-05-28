@@ -8342,6 +8342,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           },
                           additionalProperties: false,
                         },
+                        modelCallBudget: {
+                          type: "object",
+                          properties: {
+                            criticalThreshold: {
+                              type: "integer",
+                              minimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
                       },
                       additionalProperties: false,
                     },
@@ -18280,6 +18291,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: false,
               },
+              modelCallBudget: {
+                type: "object",
+                properties: {
+                  criticalThreshold: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                    title: "Model-call Budget Threshold",
+                    description:
+                      "Abort a single embedded run after this many model inference calls; 0 disables the budget.",
+                  },
+                },
+                additionalProperties: false,
+              },
             },
             additionalProperties: false,
           },
@@ -25643,6 +25668,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "tools.loopDetection.postCompactionGuard.windowSize": {
       label: "Post-compaction Loop Guard Window Size",
       help: "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
+      tags: ["tools"],
+    },
+    "tools.loopDetection.modelCallBudget.criticalThreshold": {
+      label: "Model-call Budget Threshold",
+      help: "Abort a single embedded run after this many model inference calls; 0 disables the budget.",
       tags: ["tools"],
     },
     "tools.loopDetection.detectors.genericRepeat": {

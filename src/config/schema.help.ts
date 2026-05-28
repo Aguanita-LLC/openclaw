@@ -660,6 +660,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
   "tools.loopDetection.postCompactionGuard.windowSize":
     "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
+  "tools.loopDetection.modelCallBudget.criticalThreshold":
+    "Abort a single embedded run after this many model inference calls; 0 disables the budget.",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":

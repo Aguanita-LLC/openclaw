@@ -519,6 +519,12 @@ const ToolLoopDetectionSchema = z
     globalCircuitBreakerThreshold: z.number().int().positive().optional(),
     detectors: ToolLoopDetectionDetectorSchema,
     postCompactionGuard: ToolLoopPostCompactionGuardSchema,
+    modelCallBudget: z
+      .object({
+        criticalThreshold: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
