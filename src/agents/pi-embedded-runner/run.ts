@@ -148,6 +148,7 @@ import {
   resolveRunLivenessState,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
+import { isModelCallBudgetExceededError } from "./run/model-call-budget.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
@@ -1807,6 +1808,43 @@ export async function runEmbeddedPiAgent(
                 replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
                 error: { kind, message: errorText },
+              },
+            };
+          }
+
+          if (promptError && isModelCallBudgetExceededError(promptError)) {
+            const errorText = formatErrorMessage(promptError);
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid: resolveReplayInvalidForAttempt(),
+              livenessState: "blocked",
+              stopReason: "model_call_budget_exceeded",
+            });
+            return {
+              payloads: [
+                {
+                  text:
+                    "Model call budget exceeded. OpenClaw stopped this run to prevent a runaway inference loop. " +
+                    "Start a new session after fixing the loop trigger, or raise tools.loopDetection.modelCallBudget.criticalThreshold if this was expected.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: buildErrorAgentMeta({
+                  sessionId: sessionIdUsed,
+                  provider,
+                  model: model.id,
+                  contextTokens: ctxInfo.tokens,
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastAssistant: sessionLastAssistant,
+                  lastTurnTotal,
+                }),
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                replayInvalid: resolveReplayInvalidForAttempt(),
+                livenessState: "blocked",
+                error: { kind: "model_call_budget_exceeded", message: errorText },
               },
             };
           }
