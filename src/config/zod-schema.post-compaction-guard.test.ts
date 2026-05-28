@@ -121,4 +121,26 @@ describe("OpenClawSchema tools.loopDetection.postCompactionGuard validation", ()
     });
     expect(result.success).toBe(false);
   });
+
+  it("rejects non-integer modelCallBudget criticalThreshold", () => {
+    const result = OpenClawSchema.safeParse({
+      tools: {
+        loopDetection: {
+          modelCallBudget: { criticalThreshold: 2.5 },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts an empty modelCallBudget object", () => {
+    const result = OpenClawSchema.safeParse({
+      tools: {
+        loopDetection: {
+          modelCallBudget: {},
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
 });

@@ -653,15 +653,15 @@ export const FIELD_HELP: Record<string, string> = {
     "Critical threshold for repetitive patterns when detector is enabled (default: 20).",
   "tools.loopDetection.globalCircuitBreakerThreshold":
     "Global no-progress breaker threshold (default: 30).",
+  "tools.loopDetection.postCompactionGuard.windowSize":
+    "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
+  "tools.loopDetection.modelCallBudget.criticalThreshold":
+    "Abort a single embedded run after this many model inference calls; 0 disables the budget.",
   "tools.loopDetection.detectors.genericRepeat":
     "Enable generic repeated same-tool/same-params loop detection (default: true).",
   "tools.loopDetection.detectors.knownPollNoProgress":
     "Enable known poll tool no-progress loop detection (default: true).",
   "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
-  "tools.loopDetection.postCompactionGuard.windowSize":
-    "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
-  "tools.loopDetection.modelCallBudget.criticalThreshold":
-    "Abort a single embedded run after this many model inference calls; 0 disables the budget.",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":
