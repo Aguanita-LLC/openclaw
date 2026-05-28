@@ -328,6 +328,7 @@ import {
   isMidTurnPrecheckSignal,
   type MidTurnPrecheckRequest,
 } from "./midturn-precheck.js";
+import { wrapStreamFnWithModelCallBudget } from "./model-call-budget.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   shouldPreemptivelyCompactBeforePrompt,
@@ -2139,6 +2140,22 @@ export async function runEmbeddedAttempt(
           nextCallId: () => `${params.runId}:model:${(diagnosticModelCallSeq += 1)}`,
         },
       );
+      const modelCallBudgetThreshold =
+        clientToolLoopDetection?.modelCallBudget?.criticalThreshold ?? 0;
+      if (modelCallBudgetThreshold > 0) {
+        activeSession.agent.streamFn = wrapStreamFnWithModelCallBudget(
+          activeSession.agent.streamFn,
+          {
+            criticalThreshold: modelCallBudgetThreshold,
+            onExceeded: () => {
+              log.warn(
+                `model call budget exceeded (${modelCallBudgetThreshold} calls): ` +
+                  `aborting runId=${params.runId}`,
+              );
+            },
+          },
+        );
+      }
 
       try {
         if (isRawModelRun) {
