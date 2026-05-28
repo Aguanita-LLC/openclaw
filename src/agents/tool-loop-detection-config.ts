@@ -30,5 +30,9 @@ export function resolveToolLoopDetectionConfig(params: {
       ...global.postCompactionGuard,
       ...agent.postCompactionGuard,
     },
+    modelCallBudget: {
+      ...global.modelCallBudget,
+      ...agent.modelCallBudget,
+    },
   };
 }
