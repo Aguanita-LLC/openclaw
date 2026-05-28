@@ -138,6 +138,9 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
         knownPollNoProgress: true,
         pingPong: true,
       },
+      modelCallBudget: {
+        criticalThreshold: 10,
+      },
     },
   },
 }
@@ -163,6 +166,9 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
 </ParamField>
 <ParamField path="detectors.pingPong" type="boolean">
   Warn/block on alternating no-progress pair patterns.
+</ParamField>
+<ParamField path="modelCallBudget.criticalThreshold" type="number">
+  Abort a single embedded run after this many model inference calls. Set `0` to disable.
 </ParamField>
 
 <Warning>

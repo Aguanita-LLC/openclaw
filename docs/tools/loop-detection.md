@@ -36,6 +36,9 @@ Global defaults:
         knownPollNoProgress: true,
         pingPong: true,
       },
+      modelCallBudget: {
+        criticalThreshold: 10,
+      },
     },
   },
 }
@@ -72,6 +75,7 @@ Per-agent override (optional):
 - `detectors.genericRepeat`: detects repeated same-tool + same-params patterns.
 - `detectors.knownPollNoProgress`: detects known polling-like patterns with no state change.
 - `detectors.pingPong`: detects alternating ping-pong patterns.
+- `modelCallBudget.criticalThreshold`: aborts a single embedded run after this many model inference calls. Set `0` to disable. This protects Discord, Telegram, dashboard, CLI, and future channels because they share the embedded runner.
 
 For `exec`, no-progress checks compare stable command outcomes and ignore volatile runtime metadata such as duration, PID, session ID, and working directory.
 When a run id is available, recent tool-call history is evaluated only within that run so scheduled heartbeat cycles and fresh runs do not inherit stale loop counts from earlier runs.
@@ -85,6 +89,12 @@ When a run id is available, recent tool-call history is evaluated only within th
   - (optionally) raise `globalCircuitBreakerThreshold`
   - disable only the detector causing issues
   - reduce `historySize` for less strict historical context
+
+## Model-call budget
+
+Tool-loop detection observes tool behavior. A model-call loop can still burn cost if the agent repeatedly reaches the model without making progress. `modelCallBudget.criticalThreshold` is a blunt per-run safety cap around the shared embedded model call path.
+
+When the cap is reached, OpenClaw stops the run and returns a user-visible error instead of retrying another model/profile. This is intentionally channel-agnostic.
 
 ## Post-compaction guard
 
