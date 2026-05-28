@@ -80,6 +80,15 @@ export const BUILD_ALL_STEPS = [
     },
   },
   {
+    label: "control-ui",
+    kind: "node",
+    args: ["scripts/ui.js", "build"],
+    cache: {
+      inputs: ["ui/src", "ui/public", "ui/index.html", "ui/vite.config.ts", "ui/package.json"],
+      outputs: ["dist/control-ui"],
+    },
+  },
+  {
     label: "write-build-info",
     kind: "node",
     args: ["--import", "tsx", "scripts/write-build-info.ts"],
@@ -111,6 +120,7 @@ export const BUILD_ALL_PROFILES = {
     "canvas-a2ui-copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
+    "control-ui",
     "write-build-info",
     "write-cli-startup-metadata",
     "write-cli-compat",
