@@ -128,6 +128,9 @@ const sessionStoreMocks = vi.hoisted(() => ({
 const acpManagerRuntimeMocks = vi.hoisted(() => ({
   getAcpSessionManager: vi.fn(),
 }));
+const agentDriveStateMocks = vi.hoisted(() => ({
+  getActiveDrive: vi.fn(),
+}));
 const agentEventMocks = vi.hoisted(() => ({
   emitAgentEvent: vi.fn(),
   onAgentEvent: vi.fn<(listener: unknown) => () => void>(() => () => {}),
@@ -390,6 +393,11 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
 vi.mock("../../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: acpMocks.getAcpRuntimeBackend,
   requireAcpRuntimeBackend: acpMocks.requireAcpRuntimeBackend,
+}));
+vi.mock("../../acp/agent-drive-state.js", () => ({
+  getAgentDriveStateStore: () => ({
+    getActiveDrive: agentDriveStateMocks.getActiveDrive,
+  }),
 }));
 vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
@@ -800,6 +808,8 @@ describe("dispatchReplyFromConfig", () => {
     acpMocks.upsertAcpSessionMeta.mockResolvedValue(null);
     acpMocks.getAcpRuntimeBackend.mockReset();
     acpMocks.requireAcpRuntimeBackend.mockReset();
+    agentDriveStateMocks.getActiveDrive.mockReset();
+    agentDriveStateMocks.getActiveDrive.mockReturnValue(undefined);
     agentEventMocks.emitAgentEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReturnValue(() => {});
@@ -2491,6 +2501,93 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Bound ACP reply" }),
     );
+  });
+
+  it("surfaces curated ACP output when a drive is active for the bound thread", async () => {
+    setNoAbort();
+    const boundSessionKey = "agent:opencode:acp:bound-session";
+    const runtime = createAcpRuntime([
+      { type: "status", text: "running" },
+      { type: "tool_call", text: "read file", status: "started" },
+      { type: "text_delta", text: "Curated " },
+      { type: "text_delta", text: "reply" },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockImplementation(
+      (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+        params.sessionKey === boundSessionKey
+          ? {
+              sessionKey: boundSessionKey,
+              storeSessionKey: boundSessionKey,
+              cfg: {},
+              storePath: "/tmp/mock-sessions.json",
+              entry: {},
+              acp: {
+                backend: "acpx",
+                agent: "opencode",
+                runtimeSessionName: "runtime:opencode",
+                mode: "persistent",
+                state: "idle",
+                lastActivityAt: Date.now(),
+              },
+            }
+          : null,
+    );
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    const boundConversationBinding = {
+      bindingId: "binding-acp-current",
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "C123",
+      },
+      status: "active",
+      boundAt: Date.now(),
+    } satisfies SessionBindingRecord;
+    sessionBindingMocks.resolveByConversation.mockReturnValue(boundConversationBinding);
+    agentDriveStateMocks.getActiveDrive.mockReturnValue({
+      id: "drive-1",
+      status: "active",
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+        stream: { coalesceIdleMs: 0, maxChunkChars: 256 },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "fallback reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:C123",
+      To: "discord:C123",
+      AccountId: "default",
+      SessionKey: "agent:main:discord:C123",
+      MessageSid: "turn-drive-1",
+      BodyForAgent: "continue",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(agentDriveStateMocks.getActiveDrive).toHaveBeenCalledWith({
+      channel: "discord",
+      accountId: "default",
+      thread: "C123",
+    });
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Curated reply" }),
+    );
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   });
 
   it("coalesces tiny ACP token deltas into normal Discord text spacing", async () => {

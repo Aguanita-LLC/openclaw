@@ -1,3 +1,4 @@
+import { getAgentDriveStateStore } from "../../acp/agent-drive-state.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../acp/runtime/errors.js";
@@ -6,6 +7,7 @@ import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
+import type { AcpRuntimeEvent } from "../../acp/runtime/types.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
@@ -27,7 +29,9 @@ import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
+import { curateAcpRuntimeEvents, type AcpDriveCurationContext } from "./acp-drive-curation.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
+import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
   loadDispatchAcpMediaRuntime,
   resolveAcpAttachments,
@@ -52,6 +56,7 @@ const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
 const dispatchAcpTranscriptRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-transcript.runtime.js"),
 );
+const surfacedAcpDriveTurnIds = new Set<string>();
 
 function loadDispatchAcpManagerRuntime() {
   return dispatchAcpManagerRuntimeLoader.load();
@@ -159,6 +164,36 @@ async function hasBoundConversationForSession(params: {
       conversationId.length > 0
     );
   });
+}
+
+function resolveActiveAcpDriveCurationContext(params: {
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+  requestId: string;
+}): AcpDriveCurationContext | undefined {
+  const bindingContext = resolveConversationBindingContextFromMessage({
+    cfg: params.cfg,
+    ctx: params.ctx,
+  });
+  if (!bindingContext) {
+    return undefined;
+  }
+  const thread = bindingContext.threadId ?? bindingContext.conversationId;
+  if (!thread) {
+    return undefined;
+  }
+  const activeDrive = getAgentDriveStateStore().getActiveDrive({
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    thread,
+  });
+  if (!activeDrive) {
+    return undefined;
+  }
+  return {
+    turnId: params.requestId,
+    surfacedTurnIds: surfacedAcpDriveTurnIds,
+  };
 }
 
 export type AcpDispatchAttemptResult = {
@@ -491,6 +526,14 @@ export async function tryDispatchAcpReply(params: {
       logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
     }
 
+    const requestId = resolveAcpRequestId(params.ctx);
+    const acpDriveCurationContext = resolveActiveAcpDriveCurationContext({
+      cfg: params.cfg,
+      ctx: params.ctx,
+      requestId,
+    });
+    const acpDriveRuntimeEvents: AcpRuntimeEvent[] = [];
+
     await acpManager.runTurn({
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
@@ -500,12 +543,28 @@ export async function tryDispatchAcpReply(params: {
       }),
       attachments: attachments.length > 0 ? attachments : undefined,
       mode: "prompt",
-      requestId: resolveAcpRequestId(params.ctx),
+      requestId,
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
-      onEvent: async (event) => await projector.onEvent(event),
+      onEvent: async (event) => {
+        if (!acpDriveCurationContext) {
+          await projector.onEvent(event);
+          return;
+        }
+        markAcpProgress?.();
+        acpDriveRuntimeEvents.push(event);
+      },
     });
 
-    await projector.flush(true);
+    if (acpDriveCurationContext) {
+      for (const message of curateAcpRuntimeEvents(
+        acpDriveRuntimeEvents,
+        acpDriveCurationContext,
+      )) {
+        await delivery.deliver("block", { text: message.text });
+      }
+    } else {
+      await projector.flush(true);
+    }
     if (params.abortSignal?.aborted) {
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);
