@@ -276,6 +276,7 @@ export async function preflightDiscordMessage(
     isDirectMessage,
     isGroupDm,
     messageChannelId,
+    messageText: baseText,
     memberRoleIds,
     earlyThreadParentId,
   });
@@ -287,6 +288,7 @@ export async function preflightDiscordMessage(
     effectiveRoute,
     boundAgentId,
     baseSessionKey,
+    driveRoutedText,
   } = routeState;
   if (
     shouldIgnoreBoundThreadWebhookMessage({
@@ -645,8 +647,8 @@ export async function preflightDiscordMessage(
     isDirectMessage,
     isGroupDm,
     commandAuthorized,
-    baseText,
-    messageText,
+    baseText: driveRoutedText ?? baseText,
+    messageText: driveRoutedText ?? messageText,
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
     wasMentioned,
     route: effectiveRoute,

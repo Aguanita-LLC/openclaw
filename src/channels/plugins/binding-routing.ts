@@ -8,6 +8,7 @@ import {
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { DriveScopedRouteTarget } from "./binding-drive-routing.js";
 import { resolveConfiguredBinding } from "./binding-registry.js";
 import { ensureConfiguredBindingTargetReady } from "./binding-targets.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
@@ -39,6 +40,12 @@ type ConfiguredBindingRouteConversationInput =
       parentConversationId?: string;
     };
 
+type BindingDriveRouteInput = {
+  driveRouting?: {
+    target: DriveScopedRouteTarget;
+  };
+};
+
 function resolveConfiguredBindingConversationRef(
   params: ConfiguredBindingRouteConversationInput,
 ): ConversationRef {
@@ -69,7 +76,8 @@ export function resolveConfiguredBindingRoute(
   params: {
     cfg: OpenClawConfig;
     route: ResolvedAgentRoute;
-  } & ConfiguredBindingRouteConversationInput,
+  } & ConfiguredBindingRouteConversationInput &
+    BindingDriveRouteInput,
 ): ConfiguredBindingRouteResult {
   const bindingResolution =
     resolveConfiguredBinding({
@@ -92,6 +100,12 @@ export function resolveConfiguredBindingRoute(
   }
   const boundAgentId =
     resolveAgentIdFromSessionKey(boundSessionKey) || bindingResolution.statefulTarget.agentId;
+  if (params.driveRouting?.target === "binding-owner-agent") {
+    return {
+      bindingResolution,
+      route: params.route,
+    };
+  }
   return {
     bindingResolution,
     boundSessionKey,
@@ -112,7 +126,8 @@ export function resolveConfiguredBindingRoute(
 export function resolveRuntimeConversationBindingRoute(
   params: {
     route: ResolvedAgentRoute;
-  } & ConfiguredBindingRouteConversationInput,
+  } & ConfiguredBindingRouteConversationInput &
+    BindingDriveRouteInput,
 ): RuntimeConversationBindingRouteResult {
   const bindingRecord = getSessionBindingService().resolveByConversation(
     resolveConfiguredBindingConversationRef(params),
@@ -127,6 +142,12 @@ export function resolveRuntimeConversationBindingRoute(
 
   getSessionBindingService().touch(bindingRecord.bindingId);
   if (isPluginOwnedRuntimeBindingRecord(bindingRecord)) {
+    return {
+      bindingRecord,
+      route: params.route,
+    };
+  }
+  if (params.driveRouting?.target === "binding-owner-agent") {
     return {
       bindingRecord,
       route: params.route,

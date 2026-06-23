@@ -9,6 +9,8 @@ import {
   shouldIgnoreStaleDiscordRouteBinding,
 } from "./route-resolution.js";
 
+const DEFAULT_DRIVE_REDIRECT_PREFIX = "@target ";
+
 let conversationRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>
   | undefined;
@@ -18,12 +20,28 @@ async function loadConversationRuntime() {
   return await conversationRuntimePromise;
 }
 
+function resolveAcpDriveRedirectPrefix(cfg: DiscordMessagePreflightParams["cfg"]): string {
+  const acp = cfg.acp;
+  if (!acp || typeof acp !== "object") {
+    return DEFAULT_DRIVE_REDIRECT_PREFIX;
+  }
+  const drive = (acp as { drive?: unknown }).drive;
+  if (!drive || typeof drive !== "object") {
+    return DEFAULT_DRIVE_REDIRECT_PREFIX;
+  }
+  const redirectPrefix = (drive as { redirectPrefix?: unknown }).redirectPrefix;
+  return typeof redirectPrefix === "string" && redirectPrefix.trim()
+    ? redirectPrefix
+    : DEFAULT_DRIVE_REDIRECT_PREFIX;
+}
+
 export async function resolveDiscordPreflightRoute(params: {
   preflight: DiscordMessagePreflightParams;
   author: User;
   isDirectMessage: boolean;
   isGroupDm: boolean;
   messageChannelId: string;
+  messageText: string;
   memberRoleIds: string[];
   earlyThreadParentId?: string;
 }) {
@@ -47,8 +65,19 @@ export async function resolveDiscordPreflightRoute(params: {
         userId: params.author.id,
       }) ?? `user:${params.author.id}`)
     : params.messageChannelId;
+  const activeDrive = conversationRuntime.getAgentDriveStateStore().getActiveDrive({
+    channel: "discord",
+    accountId: params.preflight.accountId,
+    thread: bindingConversationId,
+  });
+  const driveRouting = conversationRuntime.resolveDriveScopedRoute({
+    text: params.messageText,
+    prefix: resolveAcpDriveRedirectPrefix(params.preflight.cfg),
+    driveActive: Boolean(activeDrive),
+  });
   let runtimeRoute = conversationRuntime.resolveRuntimeConversationBindingRoute({
     route,
+    driveRouting,
     conversation: {
       channel: "discord",
       accountId: params.preflight.accountId,
@@ -76,6 +105,7 @@ export async function resolveDiscordPreflightRoute(params: {
       ? conversationRuntime.resolveConfiguredBindingRoute({
           cfg: params.preflight.cfg,
           route,
+          driveRouting,
           conversation: {
             channel: "discord",
             accountId: params.preflight.accountId,
@@ -88,9 +118,15 @@ export async function resolveDiscordPreflightRoute(params: {
   if (!threadBinding && configuredBinding) {
     threadBinding = configuredBinding.record;
   }
+  const routeBoundSessionKey =
+    runtimeRoute.boundSessionKey ??
+    configuredRoute?.boundSessionKey ??
+    (driveRouting.target === "binding-owner-agent"
+      ? undefined
+      : threadBinding?.targetSessionKey?.trim());
   const boundSessionKey = conversationRuntime.isPluginOwnedSessionBindingRecord(threadBinding)
     ? ""
-    : (runtimeRoute.boundSessionKey ?? threadBinding?.targetSessionKey?.trim());
+    : routeBoundSessionKey;
   const effectiveRoute = runtimeRoute.boundSessionKey
     ? runtimeRoute.route
     : resolveDiscordEffectiveRoute({
@@ -108,5 +144,7 @@ export async function resolveDiscordPreflightRoute(params: {
     effectiveRoute,
     boundAgentId: boundSessionKey ? effectiveRoute.agentId : undefined,
     baseSessionKey: effectiveRoute.sessionKey,
+    driveRoutedText:
+      activeDrive && driveRouting.target === "bound-session" ? driveRouting.text : undefined,
   };
 }

@@ -118,6 +118,30 @@ describe("runtime conversation binding route", () => {
     expect(result.boundSessionKey).toBeUndefined();
     expect(result.route).toBe(route);
   });
+
+  it("leaves the channel route on the binding owner when active drive routing selects the owner agent", () => {
+    const route = createRoute();
+    const binding = createBinding();
+    const { touch } = registerAdapter(binding);
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+      driveRouting: {
+        target: "binding-owner-agent",
+      },
+    });
+
+    expect(touch).toHaveBeenCalledWith("binding-1", undefined);
+    expect(result.bindingRecord).toBe(binding);
+    expect(result.boundSessionKey).toBeUndefined();
+    expect(result.boundAgentId).toBeUndefined();
+    expect(result.route).toBe(route);
+  });
 });
 
 describe("ensureConfiguredBindingRouteReady", () => {

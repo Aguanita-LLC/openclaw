@@ -1,23 +1,76 @@
 import * as conversationBindingRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
+import type { AgentDriveStateStore } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
+const getActiveDriveMock = vi.hoisted(() => vi.fn());
+const getAgentDriveStateStoreMock = vi.hoisted(() =>
+  vi.fn(
+    (): AgentDriveStateStore => ({
+      startDrive: vi.fn() as AgentDriveStateStore["startDrive"],
+      getActiveDrive: getActiveDriveMock as AgentDriveStateStore["getActiveDrive"],
+      getDrive: vi.fn() as AgentDriveStateStore["getDrive"],
+      listDrives: vi.fn() as AgentDriveStateStore["listDrives"],
+      recordTurn: vi.fn() as AgentDriveStateStore["recordTurn"],
+      requestStop: vi.fn() as AgentDriveStateStore["requestStop"],
+      completeDrive: vi.fn() as AgentDriveStateStore["completeDrive"],
+      reapStaleDrives: vi.fn() as AgentDriveStateStore["reapStaleDrives"],
+    }),
+  ),
+);
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
-  const { createConfiguredBindingConversationRuntimeModuleMock } =
-    await import("../test-support/configured-binding-runtime.js");
-  return await createConfiguredBindingConversationRuntimeModuleMock(
-    {
-      ensureConfiguredBindingRouteReadyMock,
-      resolveConfiguredBindingRouteMock,
-    },
-    () =>
-      vi.importActual<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>(
-        "openclaw/plugin-sdk/conversation-binding-runtime",
-      ),
-  );
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/conversation-binding-runtime")
+  >("openclaw/plugin-sdk/conversation-binding-runtime");
+  return {
+    ...actual,
+    ensureConfiguredBindingRouteReady: (
+      ...args: Parameters<typeof actual.ensureConfiguredBindingRouteReady>
+    ) => ensureConfiguredBindingRouteReadyMock(...args),
+    getAgentDriveStateStore: getAgentDriveStateStoreMock,
+    resolveConfiguredBindingRoute: (
+      ...args: Parameters<typeof actual.resolveConfiguredBindingRoute>
+    ) => resolveConfiguredBindingRouteMock(...args),
+  } satisfies typeof actual & {
+    getAgentDriveStateStore: typeof getAgentDriveStateStoreMock;
+  };
 });
+
+function createConfiguredDiscordRouteForParams(params: {
+  route: ReturnType<typeof createConfiguredDiscordRoute>["route"];
+  driveRouting?: { target: "binding-owner-agent" | "bound-session" };
+}) {
+  const configured = createConfiguredDiscordRoute();
+  if (params.driveRouting?.target !== "binding-owner-agent") {
+    return configured;
+  }
+  return {
+    ...configured,
+    boundSessionKey: undefined,
+    boundAgentId: undefined,
+    route: params.route,
+  };
+}
+
+function createDriveEnabledConfig() {
+  return {
+    ...DEFAULT_PREFLIGHT_CFG,
+    acp: {
+      ...DEFAULT_PREFLIGHT_CFG.acp,
+      drive: {
+        redirectPrefix: "@target ",
+      },
+    },
+  } satisfies typeof DEFAULT_PREFLIGHT_CFG & {
+    acp: NonNullable<typeof DEFAULT_PREFLIGHT_CFG.acp> & {
+      drive: {
+        redirectPrefix: string;
+      };
+    };
+  };
+}
 
 import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
@@ -229,8 +282,13 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     ensureConfiguredBindingRouteReadyMock.mockReset();
+    getActiveDriveMock.mockReset();
+    getActiveDriveMock.mockReturnValue(undefined);
+    getAgentDriveStateStoreMock.mockClear();
     resolveConfiguredBindingRouteMock.mockReset();
-    resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredDiscordRoute());
+    resolveConfiguredBindingRouteMock.mockImplementation((params) =>
+      createConfiguredDiscordRouteForParams(params),
+    );
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
     vi.spyOn(conversationBindingRuntime, "resolveConfiguredBindingRoute").mockImplementation(
       resolveConfiguredBindingRouteMock,
@@ -312,6 +370,84 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     expect(result).not.toBeNull();
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
     expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
+  });
+
+  it("routes active-drive plain messages to the binding owner agent", async () => {
+    getActiveDriveMock.mockReturnValue({
+      id: "drive-1",
+      status: "active",
+    });
+    const message = createDiscordMessage({
+      id: "m-drive-plain",
+      channelId: CHANNEL_ID,
+      content: "change course",
+      mentionedUsers: [],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage(
+      createBasePreflightParams({
+        cfg: createDriveEnabledConfig(),
+        data: createGuildEvent({
+          channelId: CHANNEL_ID,
+          guildId: GUILD_ID,
+          author: message.author,
+          message,
+        }),
+        guildEntries: createAllowedGuildEntries(false),
+      }),
+    );
+
+    expect(result).not.toBeNull();
+    expect(getActiveDriveMock).toHaveBeenCalledWith({
+      channel: "discord",
+      accountId: "default",
+      thread: CHANNEL_ID,
+    });
+    expect(result?.boundSessionKey).toBeUndefined();
+    expect(result?.route.sessionKey).toBe("agent:main:discord:channel:channel-1");
+    expect(result?.messageText).toBe("change course");
+  });
+
+  it("routes active-drive prefixed messages to the bound session with the prefix stripped", async () => {
+    getActiveDriveMock.mockReturnValue({
+      id: "drive-1",
+      status: "active",
+    });
+    const message = createDiscordMessage({
+      id: "m-drive-prefixed",
+      channelId: CHANNEL_ID,
+      content: "@target inspect this failure",
+      mentionedUsers: [],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage(
+      createBasePreflightParams({
+        cfg: createDriveEnabledConfig(),
+        data: createGuildEvent({
+          channelId: CHANNEL_ID,
+          guildId: GUILD_ID,
+          author: message.author,
+          message,
+        }),
+        guildEntries: createAllowedGuildEntries(false),
+      }),
+    );
+
+    expect(result).not.toBeNull();
+    expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
+    expect(result?.route.sessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
+    expect(result?.messageText).toBe("inspect this failure");
+    expect(result?.baseText).toBe("inspect this failure");
   });
 
   it("hydrates empty guild message payloads from REST before ensuring configured ACP bindings", async () => {
