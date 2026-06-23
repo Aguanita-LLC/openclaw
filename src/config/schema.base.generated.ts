@@ -1387,6 +1387,46 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             title: "ACP Max Concurrent Sessions",
             description: "Maximum concurrently active ACP sessions across this gateway process.",
           },
+          drive: {
+            type: "object",
+            properties: {
+              maxTurns: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "ACP Drive Max Turns",
+                description:
+                  "Maximum ACP target turns in one agent drive before OpenClaw terminates it (default: 8).",
+              },
+              maxWallClockSec: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "ACP Drive Max Duration (seconds)",
+                description:
+                  "Maximum elapsed seconds for one agent drive before OpenClaw terminates it (default: 1800).",
+              },
+              idleTimeoutSec: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "ACP Drive Idle Timeout (seconds)",
+                description:
+                  "Maximum seconds to wait for one ACP target reply or goal judgment before terminating the drive (default: 120).",
+              },
+              redirectPrefix: {
+                type: "string",
+                minLength: 1,
+                title: "ACP Drive Redirect Prefix",
+                description:
+                  'Prefix that routes a message directly to the bound ACP session while agent-drive mode is active (default: "@target "). Plain messages continue to the OpenClaw agent during the drive.',
+              },
+            },
+            additionalProperties: false,
+            title: "ACP Agent Drive",
+            description:
+              "Agent-driven persistent ACP orchestration bounds and active-drive redirect routing.",
+          },
           stream: {
             type: "object",
             properties: {
@@ -27029,6 +27069,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "ACP Max Concurrent Sessions",
       help: "Maximum concurrently active ACP sessions across this gateway process.",
       tags: ["performance", "storage"],
+    },
+    "acp.drive": {
+      label: "ACP Agent Drive",
+      help: "Agent-driven persistent ACP orchestration bounds and active-drive redirect routing.",
+      tags: ["advanced"],
+    },
+    "acp.drive.maxTurns": {
+      label: "ACP Drive Max Turns",
+      help: "Maximum ACP target turns in one agent drive before OpenClaw terminates it (default: 8).",
+      tags: ["performance"],
+    },
+    "acp.drive.maxWallClockSec": {
+      label: "ACP Drive Max Duration (seconds)",
+      help: "Maximum elapsed seconds for one agent drive before OpenClaw terminates it (default: 1800).",
+      tags: ["performance"],
+    },
+    "acp.drive.idleTimeoutSec": {
+      label: "ACP Drive Idle Timeout (seconds)",
+      help: "Maximum seconds to wait for one ACP target reply or goal judgment before terminating the drive (default: 120).",
+      tags: ["performance"],
+    },
+    "acp.drive.redirectPrefix": {
+      label: "ACP Drive Redirect Prefix",
+      help: 'Prefix that routes a message directly to the bound ACP session while agent-drive mode is active (default: "@target "). Plain messages continue to the OpenClaw agent during the drive.',
+      tags: ["storage"],
     },
     "acp.stream": {
       label: "ACP Stream",

@@ -34,6 +34,17 @@ export type AcpRuntimeConfig = {
   installCommand?: string;
 };
 
+export type AcpDriveConfig = {
+  /** Maximum target turns before the active drive terminates. */
+  maxTurns?: number;
+  /** Maximum elapsed drive duration in seconds. */
+  maxWallClockSec?: number;
+  /** Maximum seconds allowed without a completed target reply. */
+  idleTimeoutSec?: number;
+  /** Prefix that routes a message directly to the bound ACP session while a drive is active. */
+  redirectPrefix?: string;
+};
+
 export type AcpConfig = {
   /** Global ACP runtime gate. */
   enabled?: boolean;
@@ -43,6 +54,7 @@ export type AcpConfig = {
   defaultAgent?: string;
   allowedAgents?: string[];
   maxConcurrentSessions?: number;
+  drive?: AcpDriveConfig;
   stream?: AcpStreamConfig;
   runtime?: AcpRuntimeConfig;
 };

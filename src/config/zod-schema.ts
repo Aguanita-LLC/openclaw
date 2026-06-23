@@ -564,6 +564,15 @@ export const OpenClawSchema = z
         defaultAgent: z.string().optional(),
         allowedAgents: z.array(z.string()).optional(),
         maxConcurrentSessions: z.number().int().positive().optional(),
+        drive: z
+          .object({
+            maxTurns: z.number().int().positive().optional(),
+            maxWallClockSec: z.number().int().positive().optional(),
+            idleTimeoutSec: z.number().int().positive().optional(),
+            redirectPrefix: z.string().min(1).optional(),
+          })
+          .strict()
+          .optional(),
         stream: z
           .object({
             coalesceIdleMs: z.number().int().nonnegative().optional(),

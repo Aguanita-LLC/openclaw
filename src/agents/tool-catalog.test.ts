@@ -22,6 +22,12 @@ describe("tool-catalog", () => {
     expect(resolveCoreToolProfilePolicy("minimal")?.allow).not.toContain("bundle-mcp");
   });
 
+  it("includes agent_drive in coding and messaging profiles", () => {
+    expect(resolveCoreToolProfilePolicy("coding")?.allow).toContain("agent_drive");
+    expect(resolveCoreToolProfilePolicy("messaging")?.allow).toContain("agent_drive");
+    expect(resolveCoreToolProfilePolicy("minimal")?.allow).not.toContain("agent_drive");
+  });
+
   it("full profile uses wildcard to grant all tools (#76507)", () => {
     const policy = resolveCoreToolProfilePolicy("full");
     expect(policy).toBeDefined();

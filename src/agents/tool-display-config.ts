@@ -304,6 +304,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Session Send",
       detailKeys: ["label", "sessionKey", "agentId", "timeoutSeconds"],
     },
+    agent_drive: {
+      emoji: "🧭",
+      title: "Agent Drive",
+      detailKeys: ["action", "channel", "accountId", "thread", "goal"],
+    },
     sessions_history: {
       emoji: "🧾",
       title: "Session History",

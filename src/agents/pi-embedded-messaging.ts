@@ -1,7 +1,7 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-const CORE_MESSAGING_TOOLS = new Set(["sessions_send", "message"]);
+const CORE_MESSAGING_TOOLS = new Set(["sessions_send", "message", "agent_drive"]);
 
 // Provider docking: any plugin with `actions` opts into messaging tool handling.
 export function isMessagingTool(toolName: string): boolean {
@@ -19,6 +19,9 @@ export function isMessagingToolSendAction(
   const action = normalizeOptionalString(args.action) ?? "";
   if (toolName === "sessions_send") {
     return true;
+  }
+  if (toolName === "agent_drive") {
+    return action === "start";
   }
   if (toolName === "message") {
     return action === "send" || action === "thread-reply";

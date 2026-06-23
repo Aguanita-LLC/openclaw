@@ -459,6 +459,54 @@ Use `agents.list[].runtime` to define ACP defaults once per agent:
 - For cross-agent ACP spawns without an explicit `cwd`, OpenClaw inherits the target agent workspace from agent config.
 - Missing inherited workspace paths fall back to the backend default cwd; non-missing access failures surface as spawn errors.
 
+## Agent-driven mode
+
+Agent-driven mode lets the OpenClaw agent repeatedly guide an existing
+persistent ACP-bound Codex session toward an operator goal while posting a
+curated agent-to-Codex dialogue in the bound thread.
+
+Start the drive by asking the OpenClaw agent in natural language from an
+unbound channel or DM. Include the target Discord thread and goal, for example:
+
+> Drive Codex in Discord thread `222222222222222222` until the failing tests
+> pass, and keep the thread updated.
+
+The agent calls the owner-only `agent_drive` tool with `action: "start"`,
+validates the configured persistent ACP binding, reuses its session, and
+applies the configured bounds. The tool sends each instruction through
+`sessions_send`; a separate OpenClaw agent judgment step classifies each reply
+as progress or goal completion.
+
+To stop, tell the OpenClaw agent to stop the drive for that thread. While a
+drive is active, a plain stop request posted in the bound thread also routes to
+the OpenClaw agent, which calls `agent_drive` with `action: "stop"`.
+
+Routing changes only while the drive is active:
+
+- Plain thread messages route to the OpenClaw agent for redirects and stop requests.
+- Messages beginning with `acp.drive.redirectPrefix` route directly to the bound ACP session with the prefix removed.
+- After the drive terminates, ordinary bound-thread routing is restored, so plain messages route directly to the bound ACP session.
+
+Configure hard bounds globally:
+
+```json5
+{
+  acp: {
+    drive: {
+      maxTurns: 8,
+      maxWallClockSec: 1800,
+      idleTimeoutSec: 120,
+      redirectPrefix: "@target ",
+    },
+  },
+}
+```
+
+`maxTurns` caps completed Codex turns, `maxWallClockSec` caps total elapsed
+time, and `idleTimeoutSec` caps one send or goal-judgment wait. Drive state is
+durable, so stale active records are reaped after restart rather than silently
+leaving the thread in drive routing.
+
 ## Start ACP sessions
 
 Two ways to start an ACP session:

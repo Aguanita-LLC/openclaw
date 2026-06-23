@@ -644,6 +644,7 @@ export function buildAgentSystemPrompt(params: {
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
+    agent_drive: "Start or stop agent-driven work in a persistent ACP-bound thread",
     sessions_spawn: acpSpawnRuntimeEnabled
       ? 'Spawn a sub-agent or ACP coding session; defaults to isolated, native subagents may use context="fork" when current transcript context is required (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
       : 'Spawn an isolated sub-agent session; use context="fork" only when current transcript context is required',
@@ -676,6 +677,7 @@ export function buildAgentSystemPrompt(params: {
     "sessions_list",
     "sessions_history",
     "sessions_send",
+    "agent_drive",
     "subagents",
     "session_status",
     "image",

@@ -209,7 +209,7 @@ export function createAgentDriveStateStore(
     if (index < 0) {
       return undefined;
     }
-    const nextRecord = mutate(records[index] as AgentDriveRecord);
+    const nextRecord = mutate(records[index]);
     const nextRecords = [...records];
     nextRecords[index] = nextRecord;
     saveRecords(nextRecords);
@@ -308,9 +308,11 @@ export function createAgentDriveStateStore(
         return [];
       }
       const reaped: AgentDriveRecord[] = [];
-      const nextRecords = records.map((record) => {
+      const nextRecords: AgentDriveRecord[] = [];
+      for (const record of records) {
         if (!staleIds.has(record.id)) {
-          return record;
+          nextRecords.push(record);
+          continue;
         }
         const nextRecord: AgentDriveRecord = {
           ...record,
@@ -320,8 +322,8 @@ export function createAgentDriveStateStore(
           updatedAt: currentTime,
         };
         reaped.push(nextRecord);
-        return nextRecord;
-      });
+        nextRecords.push(nextRecord);
+      }
       saveRecords(nextRecords);
       return reaped;
     },

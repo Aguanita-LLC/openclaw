@@ -168,6 +168,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.",
   "acp.maxConcurrentSessions":
     "Maximum concurrently active ACP sessions across this gateway process.",
+  "acp.drive":
+    "Agent-driven persistent ACP orchestration bounds and active-drive redirect routing.",
+  "acp.drive.maxTurns":
+    "Maximum ACP target turns in one agent drive before OpenClaw terminates it (default: 8).",
+  "acp.drive.maxWallClockSec":
+    "Maximum elapsed seconds for one agent drive before OpenClaw terminates it (default: 1800).",
+  "acp.drive.idleTimeoutSec":
+    "Maximum seconds to wait for one ACP target reply or goal judgment before terminating the drive (default: 120).",
+  "acp.drive.redirectPrefix":
+    'Prefix that routes a message directly to the bound ACP session while agent-drive mode is active (default: "@target "). Plain messages continue to the OpenClaw agent during the drive.',
   "acp.stream":
     "ACP streaming projection controls for chunk sizing, metadata visibility, and deduped delivery behavior.",
   "acp.stream.coalesceIdleMs":

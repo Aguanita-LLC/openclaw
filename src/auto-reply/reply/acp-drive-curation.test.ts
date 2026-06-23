@@ -53,7 +53,7 @@ describe("curateAcpRuntimeEvents", () => {
         surfacedTurnIds,
       }),
     ).toEqual([{ kind: "codex-reply", text: "New" }]);
-    expect([...surfacedTurnIds].sort()).toEqual(["turn-1", "turn-2"]);
+    expect([...surfacedTurnIds].toSorted()).toEqual(["turn-1", "turn-2"]);
   });
 
   it("preserves reply order across completed turns", () => {

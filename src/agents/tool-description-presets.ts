@@ -8,6 +8,8 @@ export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY =
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Send a message to another visible session.";
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent or ACP sessions.";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent sessions.";
+export const AGENT_DRIVE_TOOL_DISPLAY_SUMMARY =
+  "Start or stop an agent-driven persistent ACP session.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status, usage, and model state.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track a short structured work plan.";
 

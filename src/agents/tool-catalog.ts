@@ -1,4 +1,5 @@
 import {
+  AGENT_DRIVE_TOOL_DISPLAY_SUMMARY,
   CRON_TOOL_DISPLAY_SUMMARY,
   EXEC_TOOL_DISPLAY_SUMMARY,
   PROCESS_TOOL_DISPLAY_SUMMARY,
@@ -139,6 +140,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Read memory files",
     sectionId: "memory",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "agent_drive",
+    label: "agent_drive",
+    description: AGENT_DRIVE_TOOL_DISPLAY_SUMMARY,
+    sectionId: "sessions",
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {

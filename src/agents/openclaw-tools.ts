@@ -23,6 +23,7 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { createAgentDriveTool } from "./tools/agent-drive-tool.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -563,6 +564,15 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
     }),
+    ...(embedded
+      ? []
+      : [
+          createAgentDriveTool({
+            agentSessionKey: options?.agentSessionKey,
+            agentChannel: options?.agentChannel,
+            config: resolvedConfig,
+          }),
+        ]),
     ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
