@@ -20,6 +20,10 @@ const resolveMocks = vi.hoisted(() => ({
   resolveConfiguredAcpBindingSpecBySessionKey: vi.fn(),
 }));
 
+const logMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+}));
+
 vi.mock("./control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     resolveSession: managerMocks.resolveSession,
@@ -36,6 +40,12 @@ vi.mock("./runtime/session-meta.js", () => ({
 vi.mock("./persistent-bindings.resolve.js", () => ({
   resolveConfiguredAcpBindingSpecBySessionKey:
     resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey,
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    warn: logMocks.warn,
+  }),
 }));
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
@@ -58,6 +68,7 @@ beforeEach(async () => {
   managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
   sessionMetaMocks.readAcpSessionEntry.mockReset().mockReturnValue(undefined);
   resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey.mockReset().mockReturnValue(null);
+  logMocks.warn.mockReset();
   ({ ensureConfiguredAcpBindingSession, resetAcpSessionInPlace } =
     await import("./persistent-bindings.lifecycle.js"));
 });
@@ -178,6 +189,22 @@ describe("ensureConfiguredAcpBindingSession", () => {
         agent: "codex",
       }),
     );
+  });
+
+  it("warns with the initialization error when a configured binding is unavailable", async () => {
+    const spec = createPersistentSpec();
+    managerMocks.initializeSession.mockRejectedValueOnce(new Error("ACP handshake timed out"));
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: baseCfg,
+      spec,
+    });
+
+    expect(ensured).toMatchObject({
+      ok: false,
+      error: "ACP handshake timed out",
+    });
+    expect(logMocks.warn).toHaveBeenCalledWith(expect.stringContaining("ACP handshake timed out"));
   });
 });
 

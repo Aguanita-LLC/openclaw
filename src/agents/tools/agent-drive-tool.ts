@@ -12,6 +12,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { runAgentDrive, type AgentDriveBounds, type DriveSendResult } from "../agent-drive.js";
+import { readLatestAssistantReplySnapshot, type AssistantReplySnapshot } from "../run-wait.js";
 import { stringEnum } from "../schema/typebox.js";
 import { runAgentStep } from "./agent-step.js";
 import type { AnyAgentTool } from "./common.js";
@@ -22,6 +23,8 @@ import { createSessionsSendTool } from "./sessions-send-tool.js";
 const DEFAULT_AGENT_DRIVE_MAX_TURNS = 8;
 const DEFAULT_AGENT_DRIVE_MAX_WALL_CLOCK_SEC = 1_800;
 const DEFAULT_AGENT_DRIVE_IDLE_TIMEOUT_SEC = 120;
+const AGENT_DRIVE_TRANSCRIPT_POLL_INTERVAL_MS = 25;
+const AGENT_DRIVE_TRANSCRIPT_SETTLE_TIMEOUT_MS = 5_000;
 const AGENT_DRIVE_ACTIONS = ["start", "stop"] as const;
 
 const AgentDriveToolSchema = Type.Object({
@@ -69,6 +72,73 @@ export type AgentDriveToolDeps = {
     text: string;
   }) => Promise<void>;
 };
+
+type SessionsSendDetails =
+  | {
+      status?: unknown;
+      reply?: unknown;
+      error?: unknown;
+    }
+  | undefined;
+
+type ResolveSessionsSendReplyDeps = {
+  readReplySnapshot: typeof readLatestAssistantReplySnapshot;
+  now: () => number;
+  sleep: (delayMs: number) => Promise<void>;
+};
+
+const defaultResolveSessionsSendReplyDeps: ResolveSessionsSendReplyDeps = {
+  readReplySnapshot: readLatestAssistantReplySnapshot,
+  now: () => Date.now(),
+  sleep: async (delayMs) => {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+  },
+};
+
+async function resolveSessionsSendReply(
+  params: {
+    details: SessionsSendDetails;
+    baseline: AssistantReplySnapshot;
+    targetSessionKey: string;
+    timeoutMs: number;
+  },
+  deps: ResolveSessionsSendReplyDeps = defaultResolveSessionsSendReplyDeps,
+): Promise<string> {
+  if (params.details?.status !== "ok") {
+    const status = typeof params.details?.status === "string" ? params.details.status : "unknown";
+    const error =
+      typeof params.details?.error === "string" && params.details.error.trim()
+        ? params.details.error
+        : `sessions_send returned status ${status}`;
+    throw new Error(error);
+  }
+  if (typeof params.details.reply === "string") {
+    return params.details.reply;
+  }
+
+  const timeoutMs = Math.max(0, Math.floor(params.timeoutMs));
+  const deadline = deps.now() + timeoutMs;
+  while (true) {
+    const latest = await deps.readReplySnapshot({
+      sessionKey: params.targetSessionKey,
+    });
+    if (
+      latest.text &&
+      (!params.baseline.fingerprint || latest.fingerprint !== params.baseline.fingerprint)
+    ) {
+      return latest.text;
+    }
+    const remainingMs = deadline - deps.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await deps.sleep(Math.min(AGENT_DRIVE_TRANSCRIPT_POLL_INTERVAL_MS, remainingMs));
+  }
+
+  throw new Error("sessions_send returned status ok without an updated assistant reply");
+}
 
 function readDriveConfig(cfg: OpenClawConfig): {
   maxTurns?: number;
@@ -179,23 +249,23 @@ function createDefaultDeps(params: {
     resolveBinding: resolveConfiguredAcpBindingRecord,
     ensureBinding: ensureConfiguredAcpBindingSession,
     async sendSession(sendParams) {
+      const baseline = await readLatestAssistantReplySnapshot({
+        sessionKey: sendParams.targetSessionKey,
+      });
       const result = await sessionsSend.execute("agent-drive-send", {
         sessionKey: sendParams.targetSessionKey,
         message: sendParams.prompt,
         timeoutSeconds: sendParams.timeoutSeconds,
       });
-      const details = result.details as
-        | { status?: unknown; reply?: unknown; error?: unknown }
-        | undefined;
-      if (details?.status !== "ok" || typeof details.reply !== "string") {
-        const status = typeof details?.status === "string" ? details.status : "unknown";
-        const error =
-          typeof details?.error === "string" && details.error.trim()
-            ? details.error
-            : `sessions_send returned status ${status}`;
-        throw new Error(error);
-      }
-      return details.reply;
+      return await resolveSessionsSendReply({
+        details: result.details as SessionsSendDetails,
+        baseline,
+        targetSessionKey: sendParams.targetSessionKey,
+        timeoutMs: Math.min(
+          sendParams.timeoutSeconds * 1_000,
+          AGENT_DRIVE_TRANSCRIPT_SETTLE_TIMEOUT_MS,
+        ),
+      });
     },
     judgeReply: judgeDriveReply,
     async surface(surfaceParams) {
@@ -302,7 +372,7 @@ export function createAgentDriveTool(options: {
         return jsonResult({
           status: "error",
           error: "binding_unavailable",
-          message: ensured.error,
+          message: `Persistent ACP binding unavailable: ${ensured.error}`,
         });
       }
       const bounds = resolveAgentDriveBounds(cfg);
@@ -321,10 +391,14 @@ export function createAgentDriveTool(options: {
       }
 
       try {
+        const targetLabel =
+          normalizeOptionalString(binding.spec.label) ??
+          normalizeOptionalString(binding.spec.acpAgentId) ??
+          binding.spec.agentId;
         const result = await runAgentDrive({
           key,
           goal,
-          targetLabel: "Codex",
+          targetLabel,
           bounds,
           store: deps.store,
           send: async (prompt): Promise<DriveSendResult> => {
@@ -369,5 +443,6 @@ export function createAgentDriveTool(options: {
 
 export const __testing = {
   parseAgentDriveJudgment,
+  resolveSessionsSendReply,
   resolveAgentDriveBounds,
 };

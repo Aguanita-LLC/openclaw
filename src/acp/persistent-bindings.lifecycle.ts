@@ -2,6 +2,7 @@ import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "./persistent-bindings.resolve.js";
@@ -12,6 +13,8 @@ import {
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
 import { readAcpSessionEntry } from "./runtime/session-meta.js";
+
+const log = createSubsystemLogger("acp/configured-binding");
 
 function sessionMatchesConfiguredBinding(params: {
   cfg: OpenClawConfig;
@@ -104,7 +107,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
     };
   } catch (error) {
     const message = formatErrorMessage(error);
-    logVerbose(
+    log.warn(
       `acp-configured-binding: failed ensuring ${params.spec.channel}:${params.spec.accountId}:${params.spec.conversationId} -> ${sessionKey}: ${message}`,
     );
     return {

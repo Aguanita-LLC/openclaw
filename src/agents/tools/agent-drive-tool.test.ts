@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDriveStateStore } from "../../acp/agent-drive-state.js";
 import type { ResolvedConfiguredAcpBinding } from "../../acp/persistent-bindings.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createAgentDriveTool, type AgentDriveToolDeps } from "./agent-drive-tool.js";
+import {
+  __testing as agentDriveTesting,
+  createAgentDriveTool,
+  type AgentDriveToolDeps,
+} from "./agent-drive-tool.js";
 
 const cfg: OpenClawConfig = {
   acp: {
@@ -92,6 +96,7 @@ function createBinding(
       agentId: "main",
       acpAgentId: "codex",
       mode,
+      label: "Harness",
     },
     record: {
       bindingId: "config:acp:discord:default:thread-1",
@@ -194,7 +199,7 @@ describe("agent_drive tool", () => {
         channel: "discord",
         accountId: "default",
         thread: "thread-1",
-        text: expect.stringContaining("🧭 Agent → Codex:"),
+        text: expect.stringContaining("🧭 Agent → Harness:"),
       }),
     );
     expect(result.details).toMatchObject({
@@ -206,6 +211,33 @@ describe("agent_drive tool", () => {
     expect(
       store.getActiveDrive({ channel: "discord", accountId: "default", thread: "thread-1" }),
     ).toBeUndefined();
+  });
+
+  it("waits for a new transcript reply when sessions_send completes before persistence", async () => {
+    const readReplySnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({ text: "Previous reply.", fingerprint: "previous" })
+      .mockResolvedValueOnce({ text: "Goal complete.", fingerprint: "completed" });
+    let now = 0;
+
+    const reply = await agentDriveTesting.resolveSessionsSendReply(
+      {
+        details: { status: "ok" },
+        baseline: { text: "Previous reply.", fingerprint: "previous" },
+        targetSessionKey: "agent:harness:acp:binding:1",
+        timeoutMs: 1_000,
+      },
+      {
+        readReplySnapshot,
+        now: () => now,
+        sleep: async (delayMs) => {
+          now += delayMs;
+        },
+      },
+    );
+
+    expect(reply).toBe("Goal complete.");
+    expect(readReplySnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("requests stop for the active target thread", async () => {
@@ -275,5 +307,34 @@ describe("agent_drive tool", () => {
       status: "error",
       error: "persistent_binding_required",
     });
+  });
+
+  it("includes the underlying binding initialization error before starting a drive", async () => {
+    const { deps, store } = createDeps({
+      ensureBinding: vi.fn<AgentDriveToolDeps["ensureBinding"]>(async () => ({
+        ok: false,
+        sessionKey: "agent:main:acp:binding:discord:default:hash",
+        error: "ACP handshake timed out",
+      })),
+    });
+    const tool = createAgentDriveTool({
+      agentSessionKey: "agent:main:discord:direct:operator",
+      config: cfg,
+      deps,
+    });
+
+    const result = await tool.execute("call-5", {
+      action: "start",
+      channel: "discord",
+      thread: "thread-1",
+      goal: "goal",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "binding_unavailable",
+      message: "Persistent ACP binding unavailable: ACP handshake timed out",
+    });
+    expect(store.startDrive).not.toHaveBeenCalled();
   });
 });
