@@ -465,6 +465,29 @@ Agent-driven mode lets the OpenClaw agent repeatedly guide an existing
 persistent ACP-bound Codex session toward an operator goal while posting a
 curated agent-to-Codex dialogue in the bound thread.
 
+### Prerequisites
+
+Agent-driven mode needs two things configured before it can start:
+
+- **A configured persistent ACP binding for the target thread.** `agent_drive`
+  resolves only configured `bindings[]` entries (see
+  [Persistent channel bindings](/tools/acp-agents#persistent-channel-bindings)),
+  not temporary runtime binds created from the `/acp` menu or thread-focus
+  flows. The binding must have `acp.mode: "persistent"`. Without it the tool
+  returns `binding_not_found`.
+- **Cross-agent messaging enabled.** The drive sends from the owner agent to the
+  bound ACP agent, which is a cross-agent send, so `tools.agentToAgent.enabled`
+  must be `true`. If `tools.agentToAgent.allow` is set, it must include **both**
+  the owner agent id and the bound ACP agent id (the allowlist is checked for
+  the requester and the target). Without this the drive fails with an
+  agent-to-agent messaging error.
+
+```json5
+{
+  tools: { agentToAgent: { enabled: true, allow: ["main", "codex"] } },
+}
+```
+
 Start the drive by asking the OpenClaw agent in natural language from an
 unbound channel or DM. Include the target Discord thread and goal, for example:
 
