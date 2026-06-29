@@ -201,6 +201,36 @@ describe("auth external oauth helpers", () => {
     });
   });
 
+  it("does not add Codex CLI default when a named Codex OAuth profile is usable", () => {
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({
+        access: "cli-default-access-token",
+        refresh: "cli-default-refresh-token",
+        expires: createUsableOAuthExpiry(),
+        accountId: "acct-cli",
+      }),
+    );
+
+    const overlaid = overlayExternalOAuthProfiles(
+      createStore({
+        "openai-codex:aguanitallc@gmail.com": createCredential({
+          access: "named-local-access-token",
+          refresh: "named-local-refresh-token",
+          expires: createUsableOAuthExpiry(),
+          accountId: "acct-cli",
+          email: "aguanitallc@gmail.com",
+        }),
+      }),
+      { externalCliProviderIds: ["openai-codex"] },
+    );
+
+    expect(overlaid.profiles["openai-codex:default"]).toBeUndefined();
+    expect(overlaid.profiles["openai-codex:aguanitallc@gmail.com"]).toMatchObject({
+      access: "named-local-access-token",
+      refresh: "named-local-refresh-token",
+    });
+  });
+
   it("keeps explicit local non-oauth auth over external cli oauth overlays", () => {
     readCodexCliCredentialsCachedMock.mockReturnValue(
       createCredential({
