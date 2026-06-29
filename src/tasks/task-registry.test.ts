@@ -1531,7 +1531,7 @@ describe("task-registry", () => {
       expect(tasks[0]).toMatchObject({
         runId: "run-lost",
         status: "lost",
-        error: "backing session missing",
+        error: "ACP task inactive; session metadata preserved",
       });
       expect(getTaskById(task.taskId)).toMatchObject({
         status: "running",
@@ -1569,7 +1569,7 @@ describe("task-registry", () => {
       });
       expect(getTaskById(task.taskId)).toMatchObject({
         status: "lost",
-        error: "backing session missing",
+        error: "ACP task inactive; session metadata preserved",
       });
       expect(getTaskById(task.taskId)?.cleanupAfter).toBeGreaterThan(now);
       expect(getInspectableTaskAuditSummary()).toMatchObject({
@@ -2400,12 +2400,12 @@ describe("task-registry", () => {
 
       expect(getInspectableTaskAuditSummary()).toEqual({
         total: 1,
-        warnings: 0,
-        errors: 1,
+        warnings: 1,
+        errors: 0,
         byCode: {
           stale_queued: 0,
-          stale_running: 1,
-          lost: 0,
+          stale_running: 0,
+          lost: 1,
           delivery_failed: 0,
           missing_cleanup: 0,
           inconsistent_timestamps: 0,
