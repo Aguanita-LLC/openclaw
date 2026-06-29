@@ -225,6 +225,27 @@ function isExternalCliProviderInScope(params: {
   });
 }
 
+function hasUsableLocalOAuthForProvider(params: {
+  store: AuthProfileStore;
+  provider: string;
+  exceptProfileId: string;
+  now: number;
+}): boolean {
+  const provider = normalizeProviderId(params.provider);
+  if (!provider) {
+    return false;
+  }
+  return Object.entries(params.store.profiles).some(([profileId, credential]) => {
+    if (profileId === params.exceptProfileId || credential.type !== "oauth") {
+      return false;
+    }
+    return (
+      normalizeProviderId(credential.provider) === provider &&
+      hasUsableOAuthCredential(credential, params.now)
+    );
+  });
+}
+
 export function resolveExternalCliAuthProfiles(
   store: AuthProfileStore,
   options?: ExternalCliAuthProfileOptions,
@@ -233,6 +254,21 @@ export function resolveExternalCliAuthProfiles(
   const now = Date.now();
   for (const providerConfig of EXTERNAL_CLI_SYNC_PROVIDERS) {
     if (!isExternalCliProviderInScope({ providerConfig, store, options })) {
+      continue;
+    }
+    if (
+      providerConfig.bootstrapOnly &&
+      hasUsableLocalOAuthForProvider({
+        store,
+        provider: providerConfig.provider,
+        exceptProfileId: providerConfig.profileId,
+        now,
+      })
+    ) {
+      log.debug("kept named local oauth over external cli bootstrap-only provider", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
+      });
       continue;
     }
     const creds = providerConfig.readCredentials({
