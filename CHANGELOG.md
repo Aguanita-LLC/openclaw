@@ -67,6 +67,9 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Memory/Qdrant: embed workspace reconcile chunks in one FastEmbed spawn, version managed payloads so schema migrations trigger one-time re-upserts, and explicitly preserve non-reconciler points in the shared `agent-memory` collection.
+- Tasks/ACP: finalize stale inactive ACP task runs without deleting ACP session metadata, so inactive ACP sessions can remain resumable/archiveable without blocking Gateway restarts.
+- MCP: external MCP tool results (e.g. QMD `get`/`multi_get`) that return `resource` content blocks now surface the document text inline instead of an empty or attachment-only result.
+- Auth profiles: keep a usable named local OAuth credential over an external-CLI bootstrap-only provider for the same provider, so explicit local OAuth is no longer overridden by external CLI bootstrap.
 - Infra/Windows: skip the POSIX `/tmp/openclaw` preferred path on Windows in `resolvePreferredOpenClawTmpDir` so log files, TTS temp files, and other writes land in `%TEMP%\openclaw-<uid>` instead of `C:\tmp\openclaw`. Fixes #60713. Thanks @juan-flores077.
 - Media/Windows: open saved attachment temp files read/write before fsync so Windows WebChat and `chat.send` media offloads no longer fail with EPERM during durability flush. (#76593) Thanks @qq230849622-a11y.
 - Agents/tools: honor narrow runtime tool allowlists when constructing embedded-runner tool families and bundled MCP/LSP runtimes, so cron/subagent runs that request tools such as `update_plan`, `browser`, `x_search`, channel login tools, or `group:plugins` no longer start with missing tools or unrelated bootstrap work. (#77519, #77532)
