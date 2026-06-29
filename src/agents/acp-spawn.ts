@@ -1251,6 +1251,8 @@ export async function spawnAcpDirect(
     targetAgentId,
     requesterSessionKey: ctx.agentSessionKey,
     explicitWorkspaceDir: params.cwd,
+    // Cross-agent ACP runtimes run in the target agent's own workspace, not the requester's.
+    crossAgentWorkspace: "target",
   });
   let runtimeCwd: string | undefined;
   try {
