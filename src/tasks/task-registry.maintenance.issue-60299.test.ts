@@ -58,6 +58,8 @@ function createTaskRegistryMaintenanceHarness(params: {
   resolveStorePath?: TaskRegistryMaintenanceRuntime["resolveStorePath"];
   deriveSessionChatTypeFromKey?: TaskRegistryMaintenanceRuntime["deriveSessionChatTypeFromKey"];
   acpEntry?: AcpSessionStoreEntry["entry"];
+  acpEntries?: AcpSessionStoreEntry[];
+  closeAcpSession?: TaskRegistryMaintenanceRuntime["closeAcpSession"];
   activeCronJobIds?: string[];
   activeRunIds?: string[];
   cronStore?: CronStoreFile;
@@ -72,7 +74,7 @@ function createTaskRegistryMaintenanceHarness(params: {
   const currentTasks = new Map(params.tasks.map((task) => [task.taskId, { ...task }]));
 
   const runtime: TaskRegistryMaintenanceRuntime = {
-    listAcpSessionEntries: async () => [],
+    listAcpSessionEntries: async () => params.acpEntries ?? [],
     readAcpSessionEntry: () =>
       acpEntry !== undefined
         ? ({
@@ -81,6 +83,7 @@ function createTaskRegistryMaintenanceHarness(params: {
             sessionKey: "",
             storeSessionKey: "",
             entry: acpEntry,
+            acp: acpEntry.acp,
             storeReadFailed: false,
           } satisfies AcpSessionStoreEntry)
         : ({
@@ -91,6 +94,7 @@ function createTaskRegistryMaintenanceHarness(params: {
             entry: undefined,
             storeReadFailed: false,
           } satisfies AcpSessionStoreEntry),
+    closeAcpSession: params.closeAcpSession,
     loadSessionStore: params.loadSessionStore ?? (() => sessionStore),
     resolveStorePath: params.resolveStorePath ?? (() => ""),
     ...(params.deriveSessionChatTypeFromKey
@@ -287,6 +291,128 @@ describe("task-registry maintenance issue #60299", () => {
         runId: "run-running-live",
       }),
     ]);
+  });
+
+  it("finalizes stale inactive ACP task runs without deleting their session metadata", async () => {
+    const now = Date.now();
+    const staleAt = now - 31 * 60_000;
+    const childSessionKey = "agent:codex:acp:inactive-child";
+    const acpEntry: AcpSessionStoreEntry["entry"] = {
+      sessionId: childSessionKey,
+      updatedAt: staleAt,
+      spawnedBy: "agent:codex:main",
+      acp: {
+        backend: "codex",
+        agent: "codex",
+        runtimeSessionName: "inactive-child",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: staleAt,
+      },
+    };
+    const task = makeStaleTask({
+      runtime: "acp",
+      taskId: "task-acp-inactive-stale",
+      ownerKey: "agent:codex:main",
+      requesterSessionKey: "agent:codex:main",
+      childSessionKey,
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+    });
+    const closeAcpSession = vi.fn();
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: {
+        [childSessionKey]: {
+          sessionId: childSessionKey,
+          updatedAt: staleAt,
+        },
+      },
+      acpEntry,
+      acpEntries: [
+        {
+          cfg: {} as never,
+          storePath: "",
+          sessionKey: childSessionKey,
+          storeSessionKey: childSessionKey,
+          entry: acpEntry,
+          acp: acpEntry.acp,
+        },
+      ],
+      closeAcpSession,
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(getInspectableActiveTaskRestartBlockers()).toEqual([]);
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "lost",
+      error: "ACP task inactive; session metadata preserved",
+    });
+    expect(closeAcpSession).not.toHaveBeenCalled();
+  });
+
+  it("finalizes stale subagent wrapper tasks for inactive ACP child sessions", async () => {
+    const now = Date.now();
+    const staleAt = now - 31 * 60_000;
+    const childSessionKey = "agent:codex:acp:wrapped-inactive-child";
+    const acpEntry: AcpSessionStoreEntry["entry"] = {
+      sessionId: childSessionKey,
+      updatedAt: staleAt,
+      spawnedBy: "agent:main:discord:channel:test",
+      acp: {
+        backend: "codex",
+        agent: "codex",
+        runtimeSessionName: "wrapped-inactive-child",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: staleAt,
+      },
+    };
+    const task = makeStaleTask({
+      runtime: "subagent",
+      taskId: "task-subagent-acp-inactive-stale",
+      ownerKey: "agent:main:discord:channel:test",
+      requesterSessionKey: "agent:main:discord:channel:test",
+      childSessionKey,
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+    });
+    const closeAcpSession = vi.fn();
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: {
+        [childSessionKey]: {
+          sessionId: childSessionKey,
+          updatedAt: staleAt,
+        },
+      },
+      acpEntry,
+      acpEntries: [
+        {
+          cfg: {} as never,
+          storePath: "",
+          sessionKey: childSessionKey,
+          storeSessionKey: childSessionKey,
+          entry: acpEntry,
+          acp: acpEntry.acp,
+        },
+      ],
+      closeAcpSession,
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(getInspectableActiveTaskRestartBlockers()).toEqual([]);
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "lost",
+      error: "ACP task inactive; session metadata preserved",
+    });
+    expect(closeAcpSession).not.toHaveBeenCalled();
   });
 
   it("marks subagent tasks lost when their child session recovery is tombstoned", async () => {

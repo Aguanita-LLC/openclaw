@@ -59,6 +59,7 @@ import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registr
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
+const TASK_STALE_RUNNING_MS = 30 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
@@ -293,6 +294,22 @@ function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   return now - referenceAt >= TASK_RECONCILE_GRACE_MS;
 }
 
+function hasStaleRunningExpired(task: TaskRecord, now: number): boolean {
+  const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
+  return now - referenceAt >= TASK_STALE_RUNNING_MS;
+}
+
+function isAcpBackedTask(task: TaskRecord): boolean {
+  if (task.runtime === "acp") {
+    return true;
+  }
+  const sessionKey = normalizeOptionalString(task.childSessionKey);
+  return Boolean(
+    sessionKey &&
+    taskRegistryMaintenanceRuntime.parseAgentSessionKey(sessionKey)?.rest.startsWith("acp:"),
+  );
+}
+
 function parseCronExecutionId(task: TaskRecord): CronExecutionId | undefined {
   const runId = task.runId?.trim();
   if (!runId?.startsWith("cron:")) {
@@ -484,6 +501,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 }
 
 function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
+  if (isAcpBackedTask(task)) {
+    return "ACP task inactive; session metadata preserved";
+  }
   if (task.runtime === "subagent") {
     const entry = findTaskSessionEntry(task, context);
     if (entry && isSubagentRecoveryWedgedEntry(entry)) {
@@ -503,6 +523,9 @@ function shouldMarkLost(
   }
   if (!hasLostGraceExpired(task, now)) {
     return false;
+  }
+  if (isAcpBackedTask(task) && hasStaleRunningExpired(task, now)) {
+    return true;
   }
   return !hasBackingSession(task, context);
 }
@@ -586,7 +609,7 @@ function hasActiveSessionBinding(sessionKey: string): boolean {
 }
 
 function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
-  if (task.runtime !== "acp" || isActiveTask(task)) {
+  if (task.runtime !== "acp" || isActiveTask(task) || task.status === "lost") {
     return false;
   }
   const sessionKey = getNormalizedTaskChildSessionKey(task);
@@ -620,6 +643,17 @@ function shouldCloseOrphanedParentOwnedAcpSession(acpEntry: AcpSessionStoreEntry
   if (
     !sessionKey ||
     taskRegistryMaintenanceRuntime.hasActiveTaskForChildSessionKey({ sessionKey })
+  ) {
+    return false;
+  }
+  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  if (
+    taskRegistryMaintenanceRuntime
+      .listTaskRecords()
+      .some(
+        (task) =>
+          normalizeLowercaseStringOrEmpty(task.childSessionKey ?? "") === normalizedSessionKey,
+      )
   ) {
     return false;
   }
