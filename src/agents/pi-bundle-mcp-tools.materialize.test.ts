@@ -1,3 +1,4 @@
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
@@ -12,6 +13,7 @@ function makeToolRuntime(
     tools?: McpCatalogTool[];
     serverName?: string;
     resultText?: string;
+    resultContent?: CallToolResult["content"];
   } = {},
 ): SessionMcpRuntime {
   const serverName = params.serverName ?? "bundleProbe";
@@ -45,7 +47,7 @@ function makeToolRuntime(
       tools,
     }),
     callTool: async () => ({
-      content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
+      content: params.resultContent ?? [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
       isError: false,
     }),
     dispose: async () => {},
@@ -131,6 +133,44 @@ describe("createBundleMcpToolRuntime", () => {
       mcpServer: "configuredProbe",
       mcpTool: "bundle_probe",
     });
+  });
+
+  it("normalizes external-MCP resource blocks to text", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        resultContent: [
+          {
+            type: "resource",
+            resource: {
+              uri: "qmd://doc",
+              mimeType: "text/markdown",
+              text: "# Doc",
+            },
+          },
+        ],
+      }),
+    });
+    const result = await runtime.tools[0].execute("call", {}, undefined, undefined);
+    expect(result.content[0]).toMatchObject({ type: "text", text: "# Doc" });
+  });
+
+  it("passes through resource blocks without inline text unchanged", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        resultContent: [
+          {
+            type: "resource",
+            resource: {
+              uri: "qmd://blob",
+              mimeType: "application/octet-stream",
+              blob: "AAAA",
+            },
+          },
+        ],
+      }),
+    });
+    const result = await runtime.tools[0].execute("call", {}, undefined, undefined);
+    expect(result.content[0]).toMatchObject({ type: "resource" });
   });
 
   it("returns tools sorted alphabetically for stable prompt-cache keys", async () => {

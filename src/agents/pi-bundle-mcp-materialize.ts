@@ -19,7 +19,15 @@ function toAgentToolResult(params: {
   result: CallToolResult;
 }): AgentToolResult<unknown> {
   const content = Array.isArray(params.result.content)
-    ? (params.result.content as AgentToolResult<unknown>["content"])
+    ? (params.result.content.map((block) => {
+        if (block.type === "resource") {
+          const text = (block.resource as { text?: string } | undefined)?.text;
+          if (typeof text === "string") {
+            return { type: "text" as const, text };
+          }
+        }
+        return block;
+      }) as AgentToolResult<unknown>["content"])
     : [];
   const normalizedContent: AgentToolResult<unknown>["content"] =
     content.length > 0
