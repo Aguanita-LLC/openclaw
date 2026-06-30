@@ -787,15 +787,27 @@ function resolveDefaultTestDeviceIdentityPath(params: {
   platform: string;
   deviceFamily?: string;
   role: string;
+  targetId?: string;
 }) {
   const safe = normalizeLowercaseStringOrEmpty(
-    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`.replace(
+    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}-${params.targetId ?? "default"}-${process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? "0"}`.replace(
       /[^a-zA-Z0-9._-]+/g,
       "_",
     ),
   );
   const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
   return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
+}
+
+function resolveGatewayTestTargetId(ws: WebSocket): string {
+  try {
+    const url = new URL(ws.url);
+    return normalizeLowercaseStringOrEmpty(
+      `${url.hostname}-${url.port || (url.protocol === "wss:" ? "443" : "80")}`,
+    );
+  } catch {
+    return "unknown";
+  }
 }
 
 export async function readConnectChallengeNonce(
@@ -935,6 +947,7 @@ export async function connectReq(
         platform: client.platform,
         deviceFamily: client.deviceFamily,
         role,
+        targetId: resolveGatewayTestTargetId(ws),
       });
     const identity = loadOrCreateDeviceIdentity(identityPath);
     const signedAtMs = Date.now();

@@ -28,6 +28,19 @@ export async function getFreeGatewayPort(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
 }
 
+function resolveGatewayTestIdentitySalt(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    return normalizeLowercaseStringOrEmpty(
+      `${url.hostname}-${url.port || (url.protocol === "wss:" ? "443" : "80")}-${process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? "0"}`,
+    );
+  } catch {
+    return normalizeLowercaseStringOrEmpty(
+      `unknown-${process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? "0"}`,
+    );
+  }
+}
+
 export async function connectGatewayClient(params: {
   url: string;
   token?: string;
@@ -58,7 +71,7 @@ export async function connectGatewayClient(params: {
     loadOrCreateDeviceIdentity(
       (() => {
         const safe = normalizeLowercaseStringOrEmpty(
-          `${params.clientName ?? GATEWAY_CLIENT_NAMES.TEST}-${params.mode ?? GATEWAY_CLIENT_MODES.TEST}-${platform}-${params.deviceFamily ?? "none"}-${role}`.replace(
+          `${params.clientName ?? GATEWAY_CLIENT_NAMES.TEST}-${params.mode ?? GATEWAY_CLIENT_MODES.TEST}-${platform}-${params.deviceFamily ?? "none"}-${role}-${resolveGatewayTestIdentitySalt(params.url)}`.replace(
             /[^a-zA-Z0-9._-]+/g,
             "_",
           ),

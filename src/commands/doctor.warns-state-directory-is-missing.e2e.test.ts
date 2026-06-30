@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDoctorRuntime,
   ensureAuthProfileStore,
@@ -82,6 +82,10 @@ function hasCodexOAuthWarning(messageIncludes?: string): boolean {
 }
 
 describe("doctor command", () => {
+  afterEach(() => {
+    vi.doUnmock("../plugin-sdk/facade-loader.js");
+  });
+
   beforeEach(async () => {
     doctorCommand = await loadDoctorCommandForTest({
       unmockModules: ["../flows/doctor-health-contributions.js", "./doctor-state-integrity.js"],
@@ -110,9 +114,15 @@ describe("doctor command", () => {
     const loadBundledPluginPublicSurfaceModuleSync = vi.fn(() => {
       throw new Error("missing browser doctor facade");
     });
-    vi.doMock("../plugin-sdk/facade-loader.js", () => ({
-      loadBundledPluginPublicSurfaceModuleSync,
-    }));
+    vi.doMock("../plugin-sdk/facade-loader.js", async () => {
+      const actual = await vi.importActual<typeof import("../plugin-sdk/facade-loader.js")>(
+        "../plugin-sdk/facade-loader.js",
+      );
+      return {
+        ...actual,
+        loadBundledPluginPublicSurfaceModuleSync,
+      };
+    });
     doctorCommand = await loadDoctorCommandForTest({
       unmockModules: [
         "../flows/doctor-health-contributions.js",
